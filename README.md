@@ -1,4 +1,4 @@
-# Lollypop
+# Lollypop (with transparent background)
 
 [![Join the chat at https://gitter.im/gnumdk/lollypop](https://badges.gitter.im/gnumdk/lollypop.svg)](https://gitter.im/gnumdk/lollypop?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
@@ -47,6 +47,9 @@ It provides:
 - `python-gobject`
 - `python-sqlite`
 - `python-pylast >= 1.0`
+
+## Installation (Archlinux)
+Use this [PKGBUILD](https://gist.github.com/Rahix/7df4be58edea2895b9984ec43421c5b4).
 
 ## Building from git
 
