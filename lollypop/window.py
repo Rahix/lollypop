@@ -69,13 +69,6 @@ class Window(Gtk.ApplicationWindow):
         self.connect("destroy", self.__on_destroyed_window)
         self.connect("realize", self.__on_realize)
 
-    def setup_menu(self, menu):
-        """
-            Add an application menu to window
-            @parma: menu as Gio.Menu
-        """
-        self.__toolbar.setup_menu(menu)
-
     def enable_global_shortcuts(self, enable):
         """
             Enable/Disable special global shortcuts
@@ -136,15 +129,17 @@ class Window(Gtk.ApplicationWindow):
         size = self.get_size()
         self.__toolbar.set_content_width(size[0])
         if size[0] < WindowSize.BIG:
-            self.__show_miniplayer(True)
             self.__container.paned_stack(True)
+        else:
+            self.__container.paned_stack(False)
+        if size[0] < WindowSize.XXLARGE:
+            self.__show_miniplayer(True)
             self.__main_stack.show()
             self.__miniplayer.set_vexpand(False)
             self.__toolbar.title.hide()
             self.__toolbar.info.hide()
             self.__toolbar.end.set_minimal(True)
-        elif size[0] >= WindowSize.BIG:
-            self.__container.paned_stack(False)
+        else:
             self.__main_stack.show()
             self.__show_miniplayer(False)
             self.__toolbar.title.show()
@@ -577,7 +572,7 @@ class Window(Gtk.ApplicationWindow):
             # initialisation is finished...
             GLib.timeout_add(2000, App().scanner.update)
         # We delay update_list_one() to be sure inital stacked mode is set
-        GLib.timeout_add(100, self.__container.update_list_one)
+        GLib.timeout_add(200, self.__container.update_list_one)
         # Here we ignore initial configure events
         GLib.timeout_add(200, self.__connect_state_signals)
 
