@@ -48,22 +48,17 @@ class NextPopover(Gtk.Popover):
         self.__artist_label.set_text(
             ", ".join(App().player.next_track.artists))
         self.__title_label.set_text(App().player.next_track.title)
-        art = App().art.get_album_artwork(
-            App().player.next_track.album,
-            ArtSize.MEDIUM,
-            self.get_scale_factor())
-        if art is not None:
-            self.__cover.set_from_surface(art)
-            del art
-            self.__cover.set_tooltip_text(App().player.next_track.album.name)
-            self.__cover.show()
-            queue = App().player.queue
-            if queue and queue[0] == App().player.next_track.id:
-                self.__skip_btn.hide()
-            else:
-                self.__skip_btn.show()
+        App().art_helper.set_album_artwork(App().player.next_track.album,
+                                           ArtSize.MEDIUM,
+                                           ArtSize.MEDIUM,
+                                           self.__cover.get_scale_factor(),
+                                           self.__on_album_artwork)
+        self.__cover.set_tooltip_text(App().player.next_track.album.name)
+        queue = App().player.queue
+        if queue and queue[0] == App().player.next_track.id:
+            self.__skip_btn.hide()
         else:
-            self.__cover.hide()
+            self.__skip_btn.show()
 
     def should_be_shown(self):
         """
@@ -71,7 +66,7 @@ class NextPopover(Gtk.Popover):
         """
         return not self.__inhibited and\
             App().player.is_party and\
-            not App().window.container.is_paned_stack
+            not App().window.is_adaptive
 
     def inhibit(self, b):
         """
@@ -125,6 +120,17 @@ class NextPopover(Gtk.Popover):
 #######################
 # PRIVATE             #
 #######################
+    def __on_album_artwork(self, surface):
+        """
+            Set album artwork
+            @param surface as str
+        """
+        if surface is None:
+            self.__cover.set_from_icon_name("folder-music-symbolic",
+                                            Gtk.IconSize.DND)
+        else:
+            self.__cover.set_from_surface(surface)
+
     def __on_map(self, widget):
         """
             Connect signal

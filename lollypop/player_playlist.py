@@ -10,8 +10,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
+from gi.repository import GLib
 
-from lollypop.define import NextContext
+from lollypop.define import NextContext, App
 from lollypop.player_base import BasePlayer
 from lollypop.objects import Track
 
@@ -19,6 +20,7 @@ from lollypop.objects import Track
 class PlaylistPlayer(BasePlayer):
     """
         Manage user playlist
+        Assertion: we never have same track ids in playlists player
     """
 
     def __init__(self):
@@ -27,12 +29,29 @@ class PlaylistPlayer(BasePlayer):
         """
         BasePlayer.__init__(self)
 
-    def get_playlist_ids(self):
+    def insert_track(self, track, position):
         """
-            Get playlist id
-            @return id as int
+            Insert track as position
+            @param track as Track
+            @param position as int
         """
-        return self._playlist_ids
+        self._playlist_tracks.insert(position, track)
+        self.set_next()
+        self.set_prev()
+        self.emit("playlist-changed")
+
+    def remove_track(self, track_id):
+        """
+            Remove track from player
+            @param track_id as int
+        """
+        for track in self._playlist_tracks:
+            if track.id == track_id:
+                self._playlist_tracks.remove(track)
+                break
+        self.set_next()
+        self.set_prev()
+        self.emit("playlist-changed")
 
     def populate_playlist_by_tracks(self, tracks, playlist_ids):
         """
@@ -40,20 +59,13 @@ class PlaylistPlayer(BasePlayer):
             @param array of tracks as [Track]
             @param playlist ids as [int]
         """
-        if self.is_party:
-            self.set_party(False)
+        App().lookup_action("party").change_state(GLib.Variant("b", False))
         self._albums = []
         self._playlist_tracks = tracks
         self._playlist_ids = playlist_ids
-
-    def populate_playlist_by_track_ids(self, track_ids, playlist_ids):
-        """
-            Set user playlist as current playback playlist
-            @param array of track_ids as [int]
-            @param playlist ids as [int]
-        """
-        tracks = [Track(track_id) for track_id in track_ids]
-        self.populate_playlist_by_tracks(tracks, playlist_ids)
+        self.set_next()
+        self.set_prev()
+        self.emit("playlist-changed")
 
     def update_playlist(self, tracks):
         """
@@ -63,13 +75,7 @@ class PlaylistPlayer(BasePlayer):
         if self._albums:
             return
         self._playlist_tracks = tracks
-
-    def get_playlist_tracks(self):
-        """
-            Get user playlist tracks
-            @return [Track]
-        """
-        return self._playlist_tracks
+        self.emit("playlist-changed")
 
     def next(self, force):
         """
@@ -79,13 +85,13 @@ class PlaylistPlayer(BasePlayer):
         """
         track = Track()
         if force:
-            current_track = self._next_track
+            current_track_id = self._next_track.id
         else:
-            current_track = self._current_track
-        if self._playlist_tracks and\
-           current_track in self._playlist_tracks:
-            idx = self._playlist_tracks.index(current_track)
-            if idx + 1 >= len(self._playlist_tracks):
+            current_track_id = self._current_track.id
+        track_ids = self.playlist_track_ids
+        if track_ids and current_track_id in track_ids:
+            idx = track_ids.index(current_track_id)
+            if idx + 1 >= len(track_ids):
                 self._next_context = NextContext.STOP
                 idx = 0
             else:
@@ -99,15 +105,40 @@ class PlaylistPlayer(BasePlayer):
             @return Track
         """
         track = Track()
-        if self._playlist_tracks and\
-           self._current_track in self._playlist_tracks:
-            idx = self._playlist_tracks.index(self._current_track)
+        current_track_id = self._current_track.id
+        track_ids = self.playlist_track_ids
+        if track_ids and current_track_id in track_ids:
+            idx = track_ids.index(current_track_id)
             if idx - 1 < 0:
-                idx = len(self._playlist_tracks) - 1
+                idx = len(track_ids) - 1
             else:
                 idx -= 1
             track = self._playlist_tracks[idx]
         return track
+
+    @property
+    def playlist_tracks(self):
+        """
+            Get playlist tracks
+            @return Track
+        """
+        return self._playlist_tracks
+
+    @property
+    def playlist_track_ids(self):
+        """
+            Get playlist track ids
+            @return [int]
+        """
+        return [track.id for track in self._playlist_tracks]
+
+    @property
+    def playlist_ids(self):
+        """
+            Get playlist id
+            @return id as int
+        """
+        return self._playlist_ids
 
 #######################
 # PROTECTED           #

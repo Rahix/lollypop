@@ -10,7 +10,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-from gi.repository import GLib
+from gi.repository import GLib, Gio
 
 import itertools
 from time import time
@@ -34,7 +34,92 @@ class DatabaseUpgrade:
         """
         # Here are schema upgrade, key is database version,
         # value is sql request
-        self.__UPGRADES = {
+        self._UPGRADES = {
+        }
+
+    def upgrade(self, db):
+        """
+            Upgrade db
+            @param db as Database
+        """
+        # Migration from gsettings
+        gsettings_version = App().settings.get_value("db-version").get_int32()
+        if gsettings_version != -1:
+            with SqlCursor(db, True) as sql:
+                sql.execute("PRAGMA user_version=%s" % gsettings_version)
+                App().settings.set_value("db-version",
+                                         GLib.Variant("i", -1))
+        version = 0
+        with SqlCursor(db, True) as sql:
+            result = sql.execute("PRAGMA user_version")
+            v = result.fetchone()
+            if v is not None:
+                version = v[0]
+            if version < self.version:
+                for i in range(version + 1, self.version + 1):
+                    try:
+                        if isinstance(self._UPGRADES[i], str):
+                            sql.execute(self._UPGRADES[i])
+                        else:
+                            self._UPGRADES[i](db)
+                    except Exception as e:
+                        Logger.error("DB upgrade %s failed: %s" %
+                                     (i, e))
+                sql.execute("PRAGMA user_version=%s" % self.version)
+
+    @property
+    def version(self):
+        """
+            Current wanted version
+        """
+        return len(self._UPGRADES)
+
+
+class DatabasePlaylistsUpgrade(DatabaseUpgrade):
+    """
+        Manage database schema upgrades
+    """
+
+    def __init__(self):
+        """
+            Init upgrade
+        """
+        DatabaseUpgrade.__init__(self)
+        self._UPGRADES = {
+           1: "ALTER TABLE playlists ADD synced INT NOT NULL DEFAULT 0",
+           2: "ALTER TABLE playlists ADD smart_enabled INT NOT NULL DEFAULT 0",
+           3: "ALTER TABLE playlists ADD smart_sql TEXT",
+           4: self.__upgrade_4,
+        }
+
+#######################
+# PRIVATE             #
+#######################
+    def __upgrade_4(self, db):
+        """
+            Import tracks from loved playlist to DB
+        """
+        with SqlCursor(db, True) as sql1:
+            result = sql1.execute("SELECT uri\
+                                   FROM tracks\
+                                   WHERE playlist_id=?", (Type.LOVED,))
+            with SqlCursor(App().db, True) as sql2:
+                for uri in list(itertools.chain(*result)):
+                    sql2.execute("UPDATE tracks SET loved=1 WHERE uri=?",
+                                 (uri,))
+
+
+class DatabaseAlbumsUpgrade(DatabaseUpgrade):
+    """
+        Manage database schema upgrades
+    """
+
+    def __init__(self):
+        """
+            Init upgrade
+        """
+        DatabaseUpgrade.__init__(self)
+        self._UPGRADES = {
             1: "UPDATE tracks SET duration=CAST(duration as INTEGER);",
             2: "UPDATE albums SET artist_id=-2001 where artist_id=-999;",
             3: self.__upgrade_3,
@@ -63,44 +148,10 @@ class DatabaseUpgrade:
             26: self.__upgrade_26,
             27: "UPDATE tracks SET duration=CAST(duration AS INT)",
             28: self.__upgrade_28,
+            29: self.__upgrade_29,
+            30: "ALTER TABLE tracks ADD loved INT NOT NULL DEFAULT 0",
+            31: self.__upgrade_31
         }
-
-    def upgrade(self, db):
-        """
-            Upgrade db
-            @param db as Database
-        """
-        # Migration from gsettings
-        gsettings_version = App().settings.get_value("db-version").get_int32()
-        if gsettings_version != -1:
-            with SqlCursor(db) as sql:
-                sql.execute("PRAGMA user_version=%s" % gsettings_version)
-                App().settings.set_value("db-version",
-                                         GLib.Variant("i", -1))
-        version = 0
-        with SqlCursor(db) as sql:
-            result = sql.execute("PRAGMA user_version")
-            v = result.fetchone()
-            if v is not None:
-                version = v[0]
-            if version < self.version:
-                for i in range(version + 1, self.version + 1):
-                    try:
-                        if isinstance(self.__UPGRADES[i], str):
-                            sql.execute(self.__UPGRADES[i])
-                        else:
-                            self.__UPGRADES[i](db)
-                    except Exception as e:
-                        Logger.error("History DB upgrade %s failed: %s" %
-                                     (i, e))
-                sql.execute("PRAGMA user_version=%s" % self.version)
-
-    @property
-    def version(self):
-        """
-            Current wanted version
-        """
-        return len(self.__UPGRADES)
 
 #######################
 # PRIVATE             #
@@ -109,7 +160,7 @@ class DatabaseUpgrade:
         """
             Add a sorted field to artists
         """
-        with SqlCursor(db) as sql:
+        with SqlCursor(db, True) as sql:
             sql.execute("ALTER TABLE artists ADD sortname TEXT")
             result = sql.execute("SELECT DISTINCT artists.rowid,\
                                   artists.name\
@@ -125,7 +176,7 @@ class DatabaseUpgrade:
         """
             Add album artists table
         """
-        with SqlCursor(db) as sql:
+        with SqlCursor(db, True) as sql:
             sql.execute("CREATE TABLE album_artists (\
                                                 album_id INT NOT NULL,\
                                                 artist_id INT NOT NULL)")
@@ -179,7 +230,7 @@ class DatabaseUpgrade:
         """
             Convert tracks filepath column to uri
         """
-        with SqlCursor(db) as sql:
+        with SqlCursor(db, True) as sql:
             sql.execute("ALTER TABLE tracks RENAME TO tmp_tracks")
             sql.execute("""CREATE TABLE tracks (id INTEGER PRIMARY KEY,
                                               name TEXT NOT NULL,
@@ -235,7 +286,7 @@ class DatabaseUpgrade:
         """
         if App().notify:
             App().notify.send("Please wait while upgrading db...")
-        with SqlCursor(db) as sql:
+        with SqlCursor(db, True) as sql:
             result = sql.execute("SELECT tracks.rowid FROM tracks\
                                   WHERE NOT EXISTS (\
                                                  SELECT track_id\
@@ -252,7 +303,7 @@ class DatabaseUpgrade:
         for path in paths:
             uris.append(GLib.filename_to_uri(path))
         App().settings.set_value("music-uris", GLib.Variant("as", uris))
-        with SqlCursor(db) as sql:
+        with SqlCursor(db, True) as sql:
             sql.execute("ALTER TABLE albums RENAME TO tmp_albums")
             sql.execute("""CREATE TABLE albums (
                                               id INTEGER PRIMARY KEY,
@@ -297,7 +348,7 @@ class DatabaseUpgrade:
                             INT NOT NULL DEFAULT -1")
             except:
                 pass  # May fails if History was non existent
-        with SqlCursor(db) as sql:
+        with SqlCursor(db, True) as sql:
             sql.execute("ALTER TABLE tracks ADD rate\
                         INT NOT NULL DEFAULT -1")
             sql.execute("ALTER TABLE albums ADD rate\
@@ -308,7 +359,7 @@ class DatabaseUpgrade:
             Add mtimes tables
         """
         mtime = int(time())
-        with SqlCursor(db) as sql:
+        with SqlCursor(db, True) as sql:
             sql.execute("ALTER TABLE album_genres\
                          ADD mtime INT NOT NULL DEFAULT %s" % mtime)
             sql.execute("ALTER TABLE track_genres\
@@ -428,7 +479,7 @@ class DatabaseUpgrade:
         """
             Remove Charts/Web entries
         """
-        with SqlCursor(db) as sql:
+        with SqlCursor(db, True) as sql:
             result = sql.execute("SELECT rowid FROM tracks\
                                   WHERE persistent=0 OR\
                                   persistent=2 OR\
@@ -495,7 +546,7 @@ class DatabaseUpgrade:
         """
             Restore back mtime in tracks
         """
-        with SqlCursor(db) as sql:
+        with SqlCursor(db, True) as sql:
             sql.execute("ALTER TABLE tracks ADD mtime INT")
             sql.execute("ALTER TABLE albums ADD mtime INT")
 
@@ -530,7 +581,7 @@ class DatabaseUpgrade:
         """
             Rename album_id to mb_album_id in albums
         """
-        with SqlCursor(db) as sql:
+        with SqlCursor(db, True) as sql:
             sql.execute("ALTER TABLE albums RENAME TO tmp_albums")
             sql.execute("""CREATE TABLE albums (
                                id INTEGER PRIMARY KEY,
@@ -557,7 +608,7 @@ class DatabaseUpgrade:
             Upgrade setting based on db
             https://gitlab.gnome.org/gnumdk/lollypop/issues/1368
         """
-        with SqlCursor(db) as sql:
+        with SqlCursor(db, True) as sql:
             result = sql.execute("SELECT albums.rowid\
                                   FROM albums, album_artists\
                                   WHERE album_artists.artist_id=?\
@@ -567,3 +618,40 @@ class DatabaseUpgrade:
             if list(itertools.chain(*result)):
                 App().settings.set_value("show-compilations",
                                          GLib.Variant("b", True))
+
+    def __upgrade_29(self, db):
+        """
+            Upgrade year to year
+        """
+        from time import strptime, mktime
+        from datetime import datetime
+        for item in ["albums", "tracks"]:
+            with SqlCursor(db, True) as sql:
+                sql.execute("ALTER TABLE %s ADD timestamp INT" % item)
+                result = sql.execute("SELECT rowid, year FROM %s" % item)
+                for (rowid, year) in result:
+                    if year is None:
+                        continue
+                    elif len(str(year)) == 2:
+                        struct = strptime(str(year), "%y")
+                    elif len(str(year)) == 4:
+                        struct = strptime(str(year), "%Y")
+                    else:
+                        continue
+                    dt = datetime.fromtimestamp(mktime(struct))
+                    timestamp = dt.timestamp()
+                    sql.execute(
+                        "UPDATE %s set timestamp=? WHERE rowid=?" % item,
+                        (timestamp, rowid))
+
+    def __upgrade_31(self, db):
+        """
+            Delete history database related to upgrade 30
+        """
+        try:
+            LOCAL_PATH = GLib.get_user_data_dir() + "/lollypop"
+            DB_PATH = "%s/history.db" % LOCAL_PATH
+            f = Gio.File.new_for_path(DB_PATH)
+            f.delete(None)
+        except Exception as e:
+            Logger.error("DatabaseAlbumsUpgrade::__upgrade_31(): %s", e)

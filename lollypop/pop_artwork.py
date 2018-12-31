@@ -10,13 +10,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-from gi.repository import Gtk
-
-from lollypop.art_widgets import ArtworkSearch
+from lollypop.widgets_artwork import ArtworkSearchWidget
 from lollypop.define import App
+from lollypop.widgets_utils import Popover
 
 
-class CommonPopover(Gtk.Popover):
+class CommonPopover(Popover):
     """
         Resized popover
     """
@@ -25,7 +24,7 @@ class CommonPopover(Gtk.Popover):
         """
             Connect map signal
         """
-        Gtk.Popover.__init__(self)
+        Popover.__init__(self)
         self.connect("map", self.__on_map)
         self.connect("unmap", self.__on_unmap)
 
@@ -38,7 +37,7 @@ class CommonPopover(Gtk.Popover):
             @param widget as Gtk.Widget
         """
         size = App().window.get_size()
-        self.set_size_request(size[0] * 0.4,
+        self.set_size_request(size[0] * 0.6,
                               size[1] * 0.5)
 
     def __on_unmap(self, widget):
@@ -65,8 +64,8 @@ class CoversPopover(CommonPopover):
             self._widget = None
             return
         # FIXME We only search with first artist
-        self._widget = ArtworkSearch(album.artist_ids[0],
-                                     album)
+        self._widget = ArtworkSearchWidget(album.artist_ids[0],
+                                           album)
         self._widget.show()
         self.add(self._widget)
         self._widget.populate()
@@ -83,7 +82,7 @@ class ArtworkPopover(CommonPopover):
             @param album as album
         """
         CommonPopover.__init__(self)
-        self._widget = ArtworkSearch(artist_id, None)
+        self._widget = ArtworkSearchWidget(artist_id, None)
         self._widget.show()
         self.add(self._widget)
         self._widget.populate()

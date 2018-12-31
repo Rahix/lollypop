@@ -13,7 +13,6 @@
 
 from gi.repository import GLib
 
-from lollypop.helper_task import TaskHelper
 from lollypop.radios import Radios
 from lollypop.logger import Logger
 from lollypop.define import App, Type
@@ -73,7 +72,7 @@ class Base:
             radios = Radios()
             avg_popularity = radios.get_avg_popularity()
             if avg_popularity > 0:
-                popularity = radios.get_popularity(self._album_artists[0])
+                popularity = radios.get_popularity(self._radio_id)
         return popularity * 5 / avg_popularity + 0.5
 
     def set_popularity(self, new_rate):
@@ -98,7 +97,7 @@ class Base:
                 best_popularity = self.db.get_higher_popularity()
                 if new_rate == 5:
                     popularity = (popularity + best_popularity) / 2
-                radios.set_popularity(self._album_artists[0], popularity)
+                radios.set_popularity(self._radio_id, popularity)
         except Exception as e:
             Logger.error("Base::set_popularity(): %s" % e)
 
@@ -115,7 +114,7 @@ class Base:
             rate = self.db.get_rate(self.id)
         elif self.id == Type.RADIOS:
             radios = Radios()
-            rate = radios.get_rate(self._album_artists[0])
+            rate = radios.get_rate(self._radio_id)
         return rate
 
     def set_rate(self, rate):
@@ -125,7 +124,7 @@ class Base:
         """
         if self.id == Type.RADIOS:
             radios = Radios()
-            radios.set_rate(self._album_artists[0], rate)
+            radios.set_rate(self._radio_id, rate)
         else:
             self.db.set_rate(self.id, rate)
             App().player.emit("rate-changed", (self.id, rate))
@@ -136,11 +135,12 @@ class Disc:
         Represent an album disc
     """
 
-    def __init__(self, album, disc_number):
+    def __init__(self, album, disc_number, disallow_ignored_tracks):
         self.db = App().albums
         self.__tracks = []
         self.__album = album
         self.__number = disc_number
+        self.__disallow_ignored_tracks = disallow_ignored_tracks
 
     def set_tracks(self, tracks):
         """
@@ -192,14 +192,16 @@ class Disc:
                 self.album.id,
                 self.album.genre_ids,
                 self.album.artist_ids,
-                self.number)]
+                self.number,
+                self.__disallow_ignored_tracks)]
             if not self.__tracks:
                 self.__tracks = [Track(track_id, self.album)
                                  for track_id in self.db.get_disc_track_ids(
                     self.album.id,
                     self.album.genre_ids,
                     [],
-                    self.number)]
+                    self.number,
+                    self.__disallow_ignored_tracks)]
         return self.__tracks
 
 
@@ -211,70 +213,82 @@ class Album(Base):
                 "artists": "",
                 "artist_ids": [],
                 "year": None,
+                "timestamp": None,
                 "uri": "",
-                "tracks_count": 0,
+                "tracks_count": 1,
                 "duration": 0,
                 "mtime": 0,
                 "synced": False,
                 "loved": False}
 
-    def __init__(self, album_id=None, genre_ids=[], artist_ids=[]):
+    def __init__(self, album_id=None, genre_ids=[], artist_ids=[],
+                 disallow_ignored_tracks=False):
         """
             Init album
             @param album_id as int
             @param genre_ids as [int]
+            @param disallow_ignored_tracks as bool
         """
         Base.__init__(self, App().albums)
         self.id = album_id
         self.genre_ids = genre_ids
         self._tracks = []
         self._discs = []
+        self.__disallow_ignored_tracks = disallow_ignored_tracks
+        self.__one_disc = None
         # Use artist ids from db else
         if artist_ids:
             self.artist_ids = artist_ids
 
-    def merge_discs(self):
+    def clone(self, disallow_ignored_tracks):
         """
-            Merge discs into one
+            Clone album
+            @param disallow_ignored_tracks as bool
         """
-        tracks = self.tracks
-        self._discs = [Disc(self, 0)]
-        self._discs[0].set_tracks(tracks)
+        album = Album(self.id, self.genre_ids,
+                      self.artist_ids, disallow_ignored_tracks)
+        if not disallow_ignored_tracks:
+            album.set_tracks(self.tracks)
+        return album
 
-    def move_track(self, track, index):
+    def set_discs(self, discs):
         """
-            Move track to index
-            @param track as Track
-            @param index
+            Set album discs
+            @param discs as [Disc]
         """
-        if track in self._tracks:
-            self._tracks.remove(track)
-            self._tracks.insert(index, track)
+        self._discs = discs
 
     def set_tracks(self, tracks):
         """
-            Set album tracks
+            Set album tracks (cloned tracks)
             @param tracks as [Track]
         """
-        self._tracks = tracks
+        self._tracks = []
         for track in tracks:
-            track.set_album(self)
+            new_track = Track(track.id, self)
+            self._tracks.append(new_track)
 
-    def add_track(self, track):
+    def insert_track(self, track, position=-1):
         """
-            Add track to album
+            Add track to album (cloned track)
             @param track as Track
+            @param position as int
         """
-        self._tracks.append(track)
-        track.set_album(self)
+        new_track = Track(track.id, self)
+        if position == -1:
+            self._tracks.append(new_track)
+        else:
+            self._tracks.insert(position, new_track)
 
     def remove_track(self, track):
         """
             Remove track from album
             @param track as Track
+            @return True if album empty
         """
         if track in self.tracks:
             self._tracks.remove(track)
+        return len(self._tracks) == 0
 
     def clear_tracks(self):
         """
@@ -298,6 +312,26 @@ class Album(Base):
         if self.id >= 0:
             App().albums.set_loved(self.id, loved)
             self.loved = loved
+
+    def set_uri(self, uri):
+        """
+            Set album uri
+            @param uri as str
+        """
+        if self.id >= 0:
+            App().albums.set_uri(self.id, uri)
+            self.uri = uri
+
+    def get_track(self, track_id):
+        """
+            Get track
+            @param track_id as int
+            @return Track/None
+        """
+        for track in self.tracks:
+            if track.id == track_id:
+                return track
+        return None
 
     @property
     def title(self):
@@ -335,6 +369,18 @@ class Album(Base):
         return self._tracks
 
     @property
+    def one_disc(self):
+        """
+            Get album as one disc
+            @return Disc
+        """
+        if self.__one_disc is None:
+            tracks = self.tracks
+            self.__one_disc = Disc(self, 0, self.__disallow_ignored_tracks)
+            self.__one_disc.set_tracks(tracks)
+        return self.__one_disc
+
+    @property
     def discs(self):
         """
             Get albums discs
@@ -342,7 +388,8 @@ class Album(Base):
         """
         if not self._discs:
             disc_numbers = self.db.get_discs(self.id, self.genre_ids)
-            self._discs = [Disc(self, number) for number in disc_numbers]
+            self._discs = [Disc(self, number, self.__disallow_ignored_tracks)
+                           for number in disc_numbers]
         return self._discs
 
 
@@ -361,7 +408,9 @@ class Track(Base):
                 "duration": 0,
                 "number": 0,
                 "year": None,
+                "timestamp": None,
                 "mtime": 0,
+                "loved": False,
                 "mb_track_id": None}
 
     def __init__(self, track_id=None, album=None):
@@ -372,6 +421,8 @@ class Track(Base):
         """
         Base.__init__(self, App().tracks)
         self.id = track_id
+        self._radio_id = None
+        self._radio_name = ""
         self._uri = None
         self._number = 0
 
@@ -395,13 +446,6 @@ class Track(Base):
                 artist_ids = list(set(artist_ids) - set(db_album_artist_ids))
         self.__featuring_ids = list(set(artist_ids) - set(album_artist_ids))
 
-    def set_album_artists(self, artists):
-        """
-            Set album artist
-            @param artists as [int]
-        """
-        self._album_artists = artists
-
     def set_album(self, album):
         """
             Set track album
@@ -416,6 +460,18 @@ class Track(Base):
         """
         self._uri = uri
 
+    def set_radio_id(self, radio_id):
+        """
+            Set radio id
+            @param radio_id as int
+        """
+        from lollypop.radios import Radios
+        radios = Radios()
+        self.id = Type.RADIOS
+        self._radio_id = radio_id
+        self._radio_name = radios.get_name(radio_id)
+        self._uri = radios.get_uri(radio_id)
+
     def set_radio(self, name, uri):
         """
             Set radio
@@ -423,7 +479,7 @@ class Track(Base):
             @param uri as string
         """
         self.id = Type.RADIOS
-        self._album_artists = [name]
+        self._radio_name = name
         self._uri = uri
 
     def set_number(self, number):
@@ -435,29 +491,12 @@ class Track(Base):
 
     def set_loved(self, loved):
         """
-            Add or remove track from loved playlist
-            @param loved Add to loved playlist if `True`; remove if `False`
+            Mark album as loved
+            @param loved as bool
         """
-        scrobbler_love = True
-        if not self.loved:
-            if loved:
-                App().playlists.add_tracks(Type.LOVED, [self])
-        elif not loved:
-            scrobbler_love = False
-            App().playlists.remove_tracks(Type.LOVED, [self])
-        for scrobbler in App().scrobblers:
-            if scrobbler.can_love:
-                helper = TaskHelper()
-                helper.run(scrobbler.set_loved, self, scrobbler_love)
-
-    @property
-    def loved(self):
-        """
-            True if track loved
-            @return bool
-        """
-        return App().playlists.exists_track(Type.LOVED,
-                                            self)
+        if self.id >= 0:
+            App().tracks.set_loved(self.id, loved)
+            self.loved = loved
 
     @property
     def featuring_artist_ids(self):
@@ -505,6 +544,22 @@ class Track(Base):
             Alias to Track.name
         """
         return self.name
+
+    @property
+    def radio_id(self):
+        """
+            Get radio id
+            @return int
+        """
+        return self._radio_id
+
+    @property
+    def radio_name(self):
+        """
+            Get radio name
+            @return str
+        """
+        return self._radio_name
 
     @property
     def uri(self):

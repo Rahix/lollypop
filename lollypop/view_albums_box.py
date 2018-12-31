@@ -12,13 +12,13 @@
 
 from gi.repository import Gtk, GLib
 
-from lollypop.view import LazyLoadingView
+from lollypop.view_flowbox import FlowBoxView
 from lollypop.widgets_album_simple import AlbumSimpleWidget
-from lollypop.pop_album import AlbumPopover
-from lollypop.define import ArtSize
+from lollypop.define import ArtSize, App
+from lollypop.controller_view import ViewController, ViewControllerType
 
 
-class AlbumsBoxView(LazyLoadingView):
+class AlbumsBoxView(FlowBoxView, ViewController):
     """
         Show albums in a box
     """
@@ -29,93 +29,45 @@ class AlbumsBoxView(LazyLoadingView):
             @param genre ids as [int]
             @param artist ids as [int]
         """
-        LazyLoadingView.__init__(self, True)
-        self.__signal = None
-        self.__current = None
-        self.__context_album_id = None
+        FlowBoxView.__init__(self)
+        ViewController.__init__(self, ViewControllerType.ALBUM)
+        self._widget_class = AlbumSimpleWidget
         self.__genre_ids = genre_ids
         self.__artist_ids = artist_ids
-        self.__press_rect = None
-
-        self._box = Gtk.FlowBox()
-        self._box.set_filter_func(self._filter_func)
-        self._box.set_selection_mode(Gtk.SelectionMode.NONE)
-        self._box.connect("child-activated", self.__on_album_activated)
-        # Allow lazy loading to not jump up and down
-        self._box.set_homogeneous(True)
-        self._box.set_max_children_per_line(1000)
-        self._box.show()
-
-        self._viewport.set_property("valign", Gtk.Align.START)
-        self._viewport.set_property("margin", 5)
-        self._scrolled.set_property("expand", True)
-
-        self.add(self._scrolled)
-
-    def populate(self, albums):
-        """
-            Populate albums
-            @param albums as [Album]
-        """
-        GLib.idle_add(self.__add_albums, albums)
-
-    @property
-    def children(self):
-        """
-            Return view children
-            @return [AlbumWidget]
-        """
-        children = []
-        for child in self._box.get_children():
-            children.append(child)
-        return children
 
 #######################
 # PROTECTED           #
 #######################
-
-#######################
-# PRIVATE             #
-#######################
-    def __add_albums(self, albums):
+    def _add_items(self, album_ids):
         """
             Add albums to the view
             Start lazy loading
-            @param [album ids as int]
+            @param album ids as [int]
         """
-        if self._stop:
-            self._stop = False
-            return
-        if albums:
-            widget = AlbumSimpleWidget(albums.pop(0),
-                                       self.__genre_ids,
-                                       self.__artist_ids)
-            widget.connect("overlayed", self._on_overlayed)
-            self._box.insert(widget, -1)
-            widget.show()
-            self._lazy_queue.append(widget)
-            GLib.idle_add(self.__add_albums, albums)
-        else:
-            GLib.idle_add(self.lazy_loading)
-            if self._viewport.get_child() is None:
-                self._viewport.add(self._box)
+        widget = FlowBoxView._add_items(self, album_ids,
+                                        self.__genre_ids, self.__artist_ids)
+        if widget is not None:
+            widget.connect("overlayed", self.on_overlayed)
 
-    def __on_album_activated(self, flowbox, album_widget):
+    def _on_artwork_changed(self, artwork, album_id):
+        """
+            Update children artwork if matching album id
+            @param artwork as Artwork
+            @param album_id as int
+        """
+        for child in self._box.get_children():
+            if child.album.id == album_id:
+                child.set_artwork()
+
+    def _on_item_activated(self, flowbox, album_widget):
         """
             Show Context view for activated album
             @param flowbox as Gtk.Flowbox
             @param album_widget as AlbumSimpleWidget
         """
-        # Here some code for touch screens
-        # If mouse pointer activate Gtk.FlowBoxChild, overlay is on,
-        # as enter notify event enabled it
-        # Else, we are in touch screen, first time show overlay, next time
-        # show popover
-        if not album_widget.is_overlay:
-            album_widget.show_overlay(True)
+        if FlowBoxView._on_item_activated(self, flowbox, album_widget):
             return
-        cover = album_widget.get_cover()
-        if cover is None:
+        if album_widget.artwork is None:
             return
         # If widget top not on screen, popover will fail to show
         # FIXME: Report a bug and check always true
@@ -124,35 +76,39 @@ class AlbumsBoxView(LazyLoadingView):
             y = album_widget.translate_coordinates(self._box, 0, 0)[1]
             self._scrolled.get_allocation().height + y
             self._scrolled.get_vadjustment().set_value(y)
-        allocation = self.get_allocation()
-        (x, top_height) = album_widget.translate_coordinates(self, 0, 0)
-        bottom_height = allocation.height -\
-            album_widget.get_allocation().height -\
-            top_height
-        if bottom_height > top_height:
-            height = bottom_height
-        else:
-            height = top_height
-        popover = AlbumPopover(album_widget.album,
-                               self.__genre_ids,
-                               self.__artist_ids,
-                               allocation.width,
-                               height,
-                               ArtSize.NONE)
-        popover.set_relative_to(cover)
+        from lollypop.pop_album import AlbumPopover
+        popover = AlbumPopover(album_widget.album, ArtSize.NONE)
+        popover.set_relative_to(album_widget.artwork)
         popover.set_position(Gtk.PositionType.BOTTOM)
         album_widget.show_overlay(False)
         album_widget.lock_overlay(True)
         popover.connect("closed", self.__on_album_popover_closed, album_widget)
-        popover.show()
-        self.__current = album_widget
-        cover.set_opacity(0.9)
+        popover.popup()
+        album_widget.artwork.set_opacity(0.9)
 
+    def _on_map(self, widget):
+        """
+            Set active ids
+        """
+        if self.__genre_ids:
+            App().settings.set_value("state-one-ids",
+                                     GLib.Variant("ai", self.__genre_ids))
+            App().settings.set_value("state-two-ids",
+                                     GLib.Variant("ai", self.__artist_ids))
+        else:
+            App().settings.set_value("state-one-ids",
+                                     GLib.Variant("ai", self.__artist_ids))
+            App().settings.set_value("state-two-ids",
+                                     GLib.Variant("ai", []))
+
+#######################
+# PRIVATE             #
+#######################
     def __on_album_popover_closed(self, popover, album_widget):
         """
             Remove overlay and restore opacity
-            @param popover as Gtk.Popover
+            @param popover as Popover
             @param album_widget as AlbumWidget
         """
         album_widget.lock_overlay(False)
-        album_widget.get_cover().set_opacity(1)
+        album_widget.artwork.set_opacity(1)

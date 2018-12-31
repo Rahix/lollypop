@@ -12,100 +12,73 @@
 
 from gi.repository import Gtk, GLib
 
-from lollypop.helper_task import TaskHelper
-from lollypop.view import LazyLoadingView
+from gettext import gettext as _
+
+from lollypop.define import App, Type
+from lollypop.view_flowbox import FlowBoxView
 from lollypop.widgets_radio import RadioWidget
 from lollypop.radios import Radios
-from lollypop.pop_radio import RadioPopover
 from lollypop.pop_tunein import TuneinPopover
-from lollypop.define import App
+from lollypop.controller_view import ViewController, ViewControllerType
+from lollypop.view import MessageView
 
 
-class RadiosView(LazyLoadingView):
+class RadiosView(FlowBoxView, ViewController):
     """
-        Show radios in a grid
+        Show radios flow box
     """
 
     def __init__(self):
         """
             Init view
         """
-        LazyLoadingView.__init__(self, True)
-        self.__signal = App().art.connect("radio-artwork-changed",
-                                          self.__on_logo_changed)
-
-        self.__radios_manager = Radios()
-        self.__radios_manager.connect("radios-changed",
-                                      self.__on_radios_changed)
+        FlowBoxView.__init__(self)
+        ViewController.__init__(self, ViewControllerType.RADIO)
+        self._widget_class = RadioWidget
+        self.__radios = Radios()
         builder = Gtk.Builder()
         builder.add_from_resource("/org/gnome/Lollypop/RadiosView.ui")
         builder.connect_signals(self)
-        widget = builder.get_object("widget")
-        self.__empty = builder.get_object("empty")
-
-        self.__pop_tunein = TuneinPopover(self.__radios_manager)
+        self.insert_row(0)
+        self.attach(builder.get_object("widget"), 0, 0, 1, 1)
+        self.__pop_tunein = TuneinPopover(self.__radios)
         self.__pop_tunein.set_relative_to(builder.get_object("search_btn"))
 
-        self._box = Gtk.FlowBox()
-        self._box.set_selection_mode(Gtk.SelectionMode.NONE)
-        # Allow lazy loading to not jump up and down
-        self._box.set_homogeneous(True)
-        self._box.set_max_children_per_line(1000)
-        self._box.set_filter_func(self._filter_func)
-        self._box.show()
-
-        self.__stack = Gtk.Stack()
-        self.__stack.set_transition_duration(500)
-        self.__stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
-        self.__stack.add(self._scrolled)
-        self.__stack.add(self.__empty)
-        self.__stack.show()
-
-        self._viewport.set_property("valign", Gtk.Align.START)
-        self._viewport.set_property("margin", 5)
-        self._scrolled.set_property("expand", True)
-
-        self.add(widget)
-        self.add(self.__stack)
-
-    def populate(self):
+    def populate(self, radio_ids):
         """
-            Populate view with tracks from playlist
+            Add radio widgets
+            @param radio_ids as [int]
         """
-        helper = TaskHelper()
-        helper.run(self.__get_radios, callback=(self.__on_get_radios,))
-
-    @property
-    def children(self):
-        """
-            Return view children
-            @return [RadioWidget]
-        """
-        children = []
-        for child in self._box.get_children():
-            children.append(child)
-        return children
+        if radio_ids:
+            FlowBoxView.populate(self, radio_ids)
+        else:
+            self._scrolled.hide()
+            view = MessageView(_("No favorite radios"))
+            view.show()
+            self.add(view)
 
 #######################
 # PROTECTED           #
 #######################
-    def _on_destroy(self, widget):
+    def _add_items(self, radio_ids):
         """
-            Disconnect signals
-            @param widget as Gtk.Widget
+            Add radios to the view
+            Start lazy loading
+            @param radio ids as [int]
         """
-        LazyLoadingView._on_destroy(self, widget)
-        if self.__signal is not None:
-            App().art.disconnect(self.__signal)
+        widget = FlowBoxView._add_items(self, radio_ids, self.__radios)
+        if widget is not None:
+            widget.connect("overlayed", self.on_overlayed)
 
     def _on_new_clicked(self, widget):
         """
             Show popover for adding a new radio
             @param widget as Gtk.Widget
         """
-        popover = RadioPopover("", self.__radios_manager)
+        from lollypop.pop_radio import RadioPopover
+        popover = RadioPopover(None, self.__radios)
         popover.set_relative_to(widget)
-        popover.show()
+        popover.popup()
 
     def _on_search_clicked(self, widget):
         """
@@ -115,115 +88,69 @@ class RadiosView(LazyLoadingView):
         self.__pop_tunein.populate()
         self.__pop_tunein.show()
 
+    def _on_artwork_changed(self, artwork, name):
+        """
+            Update children artwork if matching name
+            @param artwork as Artwork
+            @param name as str
+        """
+        for child in self._box.get_children():
+            if name == child.name:
+                child.set_artwork()
+
+    def _on_map(self, widget):
+        """
+            Set active ids
+        """
+        self.__signal_id = self.__radios.connect("radio-changed",
+                                                 self.__on_radio_changed)
+        App().settings.set_value("state-one-ids",
+                                 GLib.Variant("ai", [Type.RADIOS]))
+        App().settings.set_value("state-two-ids",
+                                 GLib.Variant("ai", []))
+
+    def _on_unmap(self, widget):
+        """
+            Destroy popover
+            @param widget as Gtk.Widget
+        """
+        if self.__signal_id is not None:
+            self.__radios.disconnect(self.__signal_id)
+            self.__signal_id = None
+        self.__pop_tunein.destroy()
+
 #######################
 # PRIVATE             #
 #######################
-    def __get_radios(self):
+    def __add_radio(self, radio_id):
         """
-            Get radios
-            @return [name]
+            Add radio
+            @param radio_id as int
         """
-        radios = []
-        # Get radios name
-        for (name, url) in self.__radios_manager.get():
-            radios.append(name)
-        return radios
+        widget = RadioWidget(radio_id, self.__radios)
+        self._box.insert(widget, 0)
+        widget.populate()
+        widget.show()
 
-    def __on_radios_changed(self, manager):
+    def __on_radio_changed(self, radios, radio_id):
         """
-            Update radios
-            @param manager as PlaylistManager
+            Update view based on radio_id status
+            @param radios as Radios
+            @param radio_id as int
         """
-        radios_name = []
-        currents = []
-        new_name = None
-        old_child = None
-
-        # Get radios name
-        for (name, url) in manager.get():
-            radios_name.append(name)
-
-        # Get currents widget less removed
-        for child in self._box.get_children():
-            if child.title not in radios_name:
-                old_child = child
+        exists = radios.exists(radio_id)
+        if exists:
+            item = None
+            for child in self._box.get_children():
+                if child.id == radio_id:
+                    item = child
+                    break
+            if item is None:
+                self.__add_radio(radio_id)
             else:
-                currents.append(child.title)
-
-        # Add the new radio
-        for name in radios_name:
-            if name not in currents:
-                new_name = name
-                break
-
-        # Rename widget
-        if new_name is not None:
-            if old_child is not None:
-                old_child.set_name(new_name)
-            else:
-                radios = [new_name]
-                self.__show_stack(radios)
-        # Delete widget
-        elif old_child is not None:
-            old_child.destroy()
-            if not self._box.get_children():
-                self.__show_stack([])
-
-    def __show_stack(self, radios):
-        """
-            Switch empty/radios view based on radios
-            @param [radio names as string]
-        """
-        if radios:
-            self.__stack.set_visible_child(self._scrolled)
-            self.__add_radios(radios, True)
+                name = self.__radios.get_name(radio_id)
+                item.rename(name)
         else:
-            self.__stack.set_visible_child(self.__empty)
-
-    def __add_radios(self, radios, first=False):
-        """
-            Pop a radio and add it to the view,
-            repeat operation until radio list is empty
-            @param [radio names as string]
-            @param first as bool
-        """
-        if self._stop:
-            self._stop = False
-            return
-        if radios:
-            radio = radios.pop(0)
-            widget = RadioWidget(radio,
-                                 self.__radios_manager)
-            widget.connect("overlayed", self._on_overlayed)
-            widget.show()
-            self._lazy_queue.append(widget)
-            if first:
-                self._box.insert(widget, 0)
-            else:
-                self._box.insert(widget, -1)
-            GLib.idle_add(self.__add_radios, radios)
-        else:
-            GLib.idle_add(self.lazy_loading)
-            if self._viewport.get_child() is None:
-                self._viewport.add(self._box)
-
-    def __on_logo_changed(self, player, name):
-        """
-            Update radio logo
-            @param player as Plyaer
-            @param name as string
-        """
-        for child in self._box.get_children():
-            if child.title == name:
-                child.update_cover()
-
-    def __on_get_radios(self, radios):
-        """
-            Switch empty/radios view based on radios
-            @param [radio names as string]
-        """
-        if radios:
-            self.__stack.set_visible_child(self._scrolled)
-            self.__add_radios(radios, True)
-        else:
-            self.__stack.set_visible_child(self.__empty)
+            for child in self._box.get_children():
+                if child.id == radio_id:
+                    child.destroy()

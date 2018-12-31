@@ -24,15 +24,14 @@ class BasePlayer(GObject.GObject):
         "current-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
         "album-added": (GObject.SignalFlags.RUN_FIRST, None, (int,)),
         "album-removed": (GObject.SignalFlags.RUN_FIRST, None, (int,)),
+        "playlist-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
         "next-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
         "prev-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
         "seeked": (GObject.SignalFlags.RUN_FIRST, None, (int,)),
         "lock-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
         "status-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
         "volume-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
-        "loading-changed": (GObject.SignalFlags.RUN_FIRST, None, (bool,)),
         "queue-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
-        "duration-changed": (GObject.SignalFlags.RUN_FIRST, None, (int,)),
         "rate-changed": (GObject.SignalFlags.RUN_FIRST, None,
                          (GObject.TYPE_PYOBJECT,)),
         "party-changed": (GObject.SignalFlags.RUN_FIRST, None, (bool,))
@@ -49,7 +48,7 @@ class BasePlayer(GObject.GObject):
             self._base_init = True
             # Lock adding tracks to playback, do nothing here, just get it
             # with locked property
-            self._locked = False
+            self._is_locked = False
             # Should player do crossfading
             self._crossfading = False
             # Keep track of artist/album finished
@@ -73,15 +72,15 @@ class BasePlayer(GObject.GObject):
         """
             Mark player as locked
         """
-        self._locked = not self._locked
+        self._is_locked = not self._is_locked
         self.emit("lock-changed")
 
     @property
-    def locked(self):
+    def is_locked(self):
         """
-            Is player locked as bool
+            Is player.is_locked as bool
         """
-        return self._locked
+        return self._is_locked
 
     def reset_pcn(self):
         """

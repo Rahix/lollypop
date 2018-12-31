@@ -32,7 +32,8 @@ class TracksDatabase:
         pass
 
     def add(self, name, uri, duration, tracknumber, discnumber, discname,
-            album_id, year, popularity, rate, ltime, mtime, mb_track_id):
+            album_id, year, timestamp, popularity, rate, loved, ltime, mtime,
+            mb_track_id):
         """
             Add a new track to database
             @param name as string
@@ -44,20 +45,23 @@ class TracksDatabase:
             @param album_id as int
             @param genre_id as int
             @param year as int
+            @param timestamp as int
             @param popularity as int
             @param rate as int
+            @param loved as bool
             @param ltime as int
             @param mtime as int
             @param mb_track_id as str
             @return inserted rowid as int
             @warning: commit needed
         """
-        with SqlCursor(App().db) as sql:
+        with SqlCursor(App().db, True) as sql:
             result = sql.execute(
                 "INSERT INTO tracks (name, uri, duration, tracknumber,\
                 discnumber, discname, album_id,\
-                year, popularity, rate, ltime, mtime, mb_track_id) VALUES\
-                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
+                year, timestamp, popularity, rate, loved,\
+                ltime, mtime, mb_track_id) VALUES\
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
                     name,
                     uri,
                     duration,
@@ -66,8 +70,10 @@ class TracksDatabase:
                     discname,
                     album_id,
                     year,
+                    timestamp,
                     popularity,
                     rate,
+                    loved,
                     ltime,
                     mtime,
                     mb_track_id))
@@ -80,7 +86,7 @@ class TracksDatabase:
             @param artist id as int
             @warning: commit needed
         """
-        with SqlCursor(App().db) as sql:
+        with SqlCursor(App().db, True) as sql:
             artists = self.get_artist_ids(track_id)
             if artist_id not in artists:
                 sql.execute("INSERT INTO "
@@ -94,7 +100,7 @@ class TracksDatabase:
             @param genre id as int
             @warning: commit needed
         """
-        with SqlCursor(App().db) as sql:
+        with SqlCursor(App().db, True) as sql:
             genres = self.get_genre_ids(track_id)
             if genre_id not in genres:
                 sql.execute("INSERT INTO\
@@ -140,7 +146,7 @@ class TracksDatabase:
 
     def get_id_by(self, name, album_id, artist_ids):
         """
-            Return track id for uri
+            Return track id for name/album/artists
             @param name as str
             @param album id as int
             @return track id as int
@@ -164,6 +170,20 @@ class TracksDatabase:
                 return v[0]
             return None
 
+    def get_ids_by_artist(self, artist_id):
+        """
+            Return track id for artist_id
+            @param artist_id as int
+            @return [int]
+        """
+        with SqlCursor(App().db) as sql:
+            filters = (artist_id,)
+            request = "SELECT tracks.rowid FROM tracks, track_artists\
+                       WHERE track_artists.artist_id=? AND\
+                       tracks.rowid = track_artists.track_id"
+            result = sql.execute(request, filters)
+            return list(itertools.chain(*result))
+
     def get_name(self, track_id):
         """
             Get track name for track id
@@ -182,15 +202,29 @@ class TracksDatabase:
         """
             Get track year
             @param track id as int
-            @return track year as string
+            @return year as int
         """
         with SqlCursor(App().db) as sql:
             result = sql.execute("SELECT year FROM tracks WHERE rowid=?",
                                  (track_id,))
             v = result.fetchone()
             if v and v[0]:
-                return str(v[0])
-            return ""
+                return v[0]
+            return None
+
+    def get_timestamp(self, track_id):
+        """
+            Get track timestamp
+            @param track id as int
+            @return timestamp as int
+        """
+        with SqlCursor(App().db) as sql:
+            result = sql.execute("SELECT timestamp FROM tracks WHERE rowid=?",
+                                 (track_id,))
+            v = result.fetchone()
+            if v and v[0]:
+                return v[0]
+            return None
 
     def get_year_for_album(self, album_id):
         """
@@ -204,6 +238,26 @@ class TracksDatabase:
                                   FROM tracks\
                                   WHERE tracks.album_id=?\
                                   GROUP BY year\
+                                  ORDER BY occurrence DESC\
+                                  LIMIT 1", (album_id,))
+            v = result.fetchone()
+            if v is not None:
+                return v[0]
+            return None
+
+    def get_timestamp_for_album(self, album_id):
+        """
+            Get album timestamp based on tracks
+            Use most used timestamp by tracks
+            @param album id as int
+            @return int
+        """
+        with SqlCursor(App().db) as sql:
+            result = sql.execute("SELECT timestamp,\
+                                  COUNT(timestamp) AS occurrence\
+                                  FROM tracks\
+                                  WHERE tracks.album_id=?\
+                                  GROUP BY timestamp\
                                   ORDER BY occurrence DESC\
                                   LIMIT 1", (album_id,))
             v = result.fetchone()
@@ -245,7 +299,7 @@ class TracksDatabase:
             @param Track id as int
             @param uri as string
         """
-        with SqlCursor(App().db) as sql:
+        with SqlCursor(App().db, True) as sql:
             sql.execute("UPDATE tracks SET uri=?\
                          WHERE rowid=?",
                         (uri, track_id))
@@ -258,7 +312,7 @@ class TracksDatabase:
             @param Track id as int
             @param rate as int
         """
-        with SqlCursor(App().db) as sql:
+        with SqlCursor(App().db, True) as sql:
             sql.execute("UPDATE tracks SET rate=?\
                          WHERE rowid=?",
                         (rate, track_id))
@@ -422,7 +476,7 @@ class TracksDatabase:
             @param Track id as int
             @param duration as int
         """
-        with SqlCursor(App().db) as sql:
+        with SqlCursor(App().db, True) as sql:
             sql.execute("UPDATE tracks\
                          SET duration=?\
                          WHERE rowid=?", (duration, track_id,))
@@ -519,7 +573,7 @@ class TracksDatabase:
             @param track id as int
             @raise sqlite3.OperationalError on db update
         """
-        with SqlCursor(App().db) as sql:
+        with SqlCursor(App().db, True) as sql:
             result = sql.execute("SELECT popularity from tracks WHERE rowid=?",
                                  (track_id,))
             pop = result.fetchone()
@@ -537,7 +591,7 @@ class TracksDatabase:
             @param track id as int
             @param time as int
         """
-        with SqlCursor(App().db) as sql:
+        with SqlCursor(App().db, True) as sql:
             sql.execute("UPDATE tracks set ltime=? WHERE rowid=?",
                         (time, track_id))
 
@@ -565,31 +619,6 @@ class TracksDatabase:
                                   ORDER BY ltime DESC LIMIT 100")
             return list(itertools.chain(*result))
 
-    def get_persistent(self, track_id):
-        """
-            Return track persistent
-            @param track id as int
-            @return int
-        """
-        with SqlCursor(App().db) as sql:
-            result = sql.execute("SELECT rowid FROM tracks\
-                                  WHERE persistent=?", (track_id,))
-            v = result.fetchone()
-            if v is not None:
-                return v[0]
-            return 0
-
-    def set_persistent(self, track_id, persistent):
-        """
-            Set track persistent
-            @param track id as int
-            @param persistent as int
-        """
-        with SqlCursor(App().db) as sql:
-            sql.execute("UPDATE tracks\
-                         SET persistent=?\
-                         WHERE rowid=?", (persistent, track_id,))
-
     def get_randoms(self):
         """
             Return random tracks
@@ -607,12 +636,9 @@ class TracksDatabase:
             @param track id as int
             @param popularity as int
         """
-        with SqlCursor(App().db) as sql:
-            try:
-                sql.execute("UPDATE tracks set popularity=? WHERE rowid=?",
-                            (popularity, track_id))
-            except:  # Database is locked
-                pass
+        with SqlCursor(App().db, True) as sql:
+            sql.execute("UPDATE tracks set popularity=? WHERE rowid=?",
+                        (popularity, track_id))
 
     def get_popularity(self, track_id):
         """
@@ -627,6 +653,30 @@ class TracksDatabase:
             if v is not None:
                 return v[0]
             return 0
+
+    def get_loved(self, track_id):
+        """
+            Get track loved status
+            @param track_id as int
+            @return loved as int
+        """
+        with SqlCursor(App().db) as sql:
+            result = sql.execute("SELECT loved FROM tracks WHERE\
+                                 rowid=?", (track_id,))
+
+            v = result.fetchone()
+            if v is not None:
+                return v[0]
+            return 0
+
+    def get_loved_track_ids(self):
+        """
+            Get loved track ids
+            @return [int]
+        """
+        with SqlCursor(App().db) as sql:
+            result = sql.execute("SELECT rowid FROM tracks WHERE loved=1")
+            return list(itertools.chain(*result))
 
     def get_ltime(self, track_id):
         """
@@ -657,6 +707,17 @@ class TracksDatabase:
                 return v[0]
             return 0
 
+    def set_loved(self, track_id, loved):
+        """
+            Set track loved
+            @param track_id as int
+            @param loved as int
+            @warning: commit needed
+        """
+        with SqlCursor(App().db, True) as sql:
+            sql.execute("UPDATE tracks SET loved=? WHERE rowid=?",
+                        (loved, track_id))
+
     def count(self):
         """
             Count tracks
@@ -675,7 +736,7 @@ class TracksDatabase:
             @param track_id as int
             @warning commit needed
         """
-        with SqlCursor(App().db) as sql:
+        with SqlCursor(App().db, True) as sql:
             sql.execute("DELETE FROM track_artists\
                          WHERE track_id = ?", (track_id,))
             sql.execute("DELETE FROM track_genres\
@@ -720,7 +781,7 @@ class TracksDatabase:
             Remove track
             @param track id as int
         """
-        with SqlCursor(App().db) as sql:
+        with SqlCursor(App().db, True) as sql:
             sql.execute("DELETE FROM track_genres\
                          WHERE track_id=?", (track_id,))
             sql.execute("DELETE FROM track_artists\

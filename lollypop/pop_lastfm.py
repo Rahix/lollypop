@@ -13,11 +13,11 @@
 from gi.repository import Gtk, GLib, Pango
 
 from lollypop.define import App
-from lollypop.helper_task import TaskHelper
 from lollypop.utils import get_network_available
+from lollypop.widgets_utils import Popover
 
 
-class LastfmPopover(Gtk.Popover):
+class LastfmPopover(Popover):
     """
         A lastfm popover with similar artists
     """
@@ -26,7 +26,7 @@ class LastfmPopover(Gtk.Popover):
         """
             Init popover
         """
-        Gtk.Popover.__init__(self)
+        Popover.__init__(self)
         builder = Gtk.Builder()
         builder.add_from_resource("/org/gnome/Lollypop/LastfmPopover.ui")
         self.connect("map", self.__on_map)
@@ -52,9 +52,8 @@ class LastfmPopover(Gtk.Popover):
             artists = []
             for artist_id in artist_ids:
                 artists.append(App().artists.get_name(artist_id))
-            task_helper = TaskHelper()
-            task_helper.run(self.__get_similars, artists,
-                            callback=(self.__populate,))
+            App().task_helper.run(self.__get_similars, artists,
+                                  callback=(self.__populate,))
 
 #######################
 # PRIVATE             #
@@ -77,14 +76,21 @@ class LastfmPopover(Gtk.Popover):
         """
         if artists:
             artist = artists.pop(0)
-            label = Gtk.Label.new(artist)
-            label.set_ellipsize(Pango.EllipsizeMode.END)
-            label.show()
-            self.__view.add(label)
+            artist_id = App().artists.get_id(artist)
+            if artist_id is not None:
+                albums = App().artists.get_albums([artist_id])
+                if albums:
+                    label = Gtk.Label.new(artist)
+                    label.set_ellipsize(Pango.EllipsizeMode.END)
+                    label.show()
+                    self.__view.add(label)
             GLib.idle_add(self.__populate, artists)
         else:
             self.__spinner.stop()
-            self.__stack.set_visible_child(self.__view)
+            if self.__view.get_children():
+                self.__stack.set_visible_child(self.__view)
+            else:
+                self.__stack.set_visible_child_name("no-result")
 
     def __on_map(self, widget):
         """
@@ -97,6 +103,13 @@ class LastfmPopover(Gtk.Popover):
         """
             Play searched item when selected
             @param widget as Gtk.ListBox
-            @param row as AlbumRow
+            @param row as Gtk.ListBoxRow
         """
-        App().window.toolbar.end.search(row.get_child().get_text())
+        self.popdown()
+        artist_name = row.get_child().get_text()
+        artist_id = App().artists.get_id(artist_name)
+        if App().settings.get_value("show-sidebar"):
+            GLib.idle_add(App().window.container.show_artists_albums,
+                          [artist_id])
+        else:
+            GLib.idle_add(App().window.container.show_view, artist_id)

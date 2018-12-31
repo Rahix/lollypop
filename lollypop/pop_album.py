@@ -10,64 +10,39 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-from gi.repository import Gtk
-
 from lollypop.view_artist_albums import ArtistAlbumsView
-from lollypop.define import App, ArtSize
+from lollypop.define import App
+from lollypop.widgets_utils import Popover
 
 
-class AlbumPopover(Gtk.Popover):
+class AlbumPopover(Popover):
     """
         An ArtistAlbumsView in a popover
         Not an AlbumDetailedWidget because we want a lazy loading view
     """
 
-    def __init__(self, album, genre_ids,
-                 artist_ids, width, height, art_size=ArtSize.NONE):
+    def __init__(self, album, width):
         """
             Init popover
             @param album as Album
-            @param genre ids as [int]
-            @param artist ids as [int]
             @param width as int
-            @param height as int
             @param art size as int
         """
-        Gtk.Popover.__init__(self)
-        self.__height = height
+        Popover.__init__(self)
         self.__width = width
         self.get_style_context().add_class("box-shadow")
-        view = ArtistAlbumsView(artist_ids, genre_ids, art_size)
+        view = ArtistAlbumsView(album.artist_ids, album.genre_ids, False)
         view.populate([album])
-        if App().window.container.is_paned_stack:
-            for child in view.children:
-                child.hide_header_labels()
-
-        # Get height requested by child
-        album_widget = view.children[0]
-        album_widget.connect("size-allocate",
-                             self.__on_album_size_allocate,
-                             view)
+        window_width = App().window.get_allocated_width()
+        window_height = App().window.get_allocated_height()
+        wanted_width = min(900, window_width * 0.5)
+        wanted_height = max(200,
+                            min(window_height * 0.5,
+                                view.children[0].requested_height[0]))
+        view.set_property("width-request", wanted_width)
+        view.set_property("height-request", wanted_height)
         view.show()
         self.add(view)
-
-    def do_get_preferred_width(self):
-        """
-            Set maximum width
-        """
-        width = min(900, self.__width)
-        return (width, width)
-
 #######################
 # PRIVATE             #
 #######################
-    def __on_album_size_allocate(self, widget, allocation, view):
-        """
-            Update view height
-            @param widget as Gtk.Widget
-            @param allocation as Gtk.Allocation
-            @param view as ArtistAlbumsView
-        """
-        requested_height = widget.requested_height
-        wanted_height = min(600, min(self.__height, requested_height))
-        view.set_property("height-request", wanted_height)

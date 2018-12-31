@@ -35,13 +35,6 @@
             <child>
               <object class="GtkShortcutsShortcut">
                 <property name="visible">True</property>
-                <property name="title" translatable="yes" context="shortcut window">Mini Player</property>
-                <property name="accelerator">&lt;Primary&gt;m</property>
-              </object>
-            </child>
-            <child>
-              <object class="GtkShortcutsShortcut">
-                <property name="visible">True</property>
                 <property name="title" translatable="yes" context="shortcut window">Show genres</property>
                 <property name="accelerator">&lt;Primary&gt;g</property>
               </object>
@@ -64,28 +57,28 @@
               <object class="GtkShortcutsShortcut">
                 <property name="visible">True</property>
                 <property name="title" translatable="yes" context="shortcut window">Show/Hide navigation list</property>
-                <property name="accelerator">&lt;Primary&gt;h</property>
+                <property name="accelerator">F9</property>
               </object>
             </child>
             <child>
               <object class="GtkShortcutsShortcut">
                 <property name="visible">True</property>
                 <property name="title" translatable="yes" context="shortcut window">Show/Hide volume control</property>
-                <property name="accelerator">&lt;Alt&gt;v</property>
+                <property name="accelerator">&lt;Primary&gt;&lt;Alt&gt;v</property>
               </object>
             </child>
             <child>
               <object class="GtkShortcutsShortcut">
                 <property name="visible">True</property>
                 <property name="title" translatable="yes" context="shortcut window">Show lyrics</property>
-                <property name="accelerator">&lt;Alt&gt;l</property>
+                <property name="accelerator">&lt;Primary&gt;&lt;Alt&gt;l</property>
               </object>
             </child>
             <child>
               <object class="GtkShortcutsShortcut">
                 <property name="visible">True</property>
                 <property name="title" translatable="yes" context="shortcut window">Show albums from artist</property>
-                <property name="accelerator">&lt;Alt&gt;a</property>
+                <property name="accelerator">&lt;Primary&gt;&lt;Alt&gt;a</property>
               </object>
             </child>
             <child>
@@ -105,35 +98,35 @@
               <object class="GtkShortcutsShortcut">
                 <property name="visible">True</property>
                 <property name="title" translatable="yes" context="shortcut window">Play</property>
-                <property name="accelerator">x</property>
+                <property name="accelerator">&lt;Alt&gt;x</property>
               </object>
             </child>
             <child>
               <object class="GtkShortcutsShortcut">
                 <property name="visible">True</property>
                 <property name="title" translatable="yes" context="shortcut window">Pause</property>
-                <property name="accelerator">c space</property>
+                <property name="accelerator">&lt;Alt&gt;c</property>
               </object>
             </child>
             <child>
               <object class="GtkShortcutsShortcut">
                 <property name="visible">True</property>
                 <property name="title" translatable="yes" context="shortcut window">Stop</property>
-                <property name="accelerator">v</property>
+                <property name="accelerator">&lt;Alt&gt;v</property>
               </object>
             </child>
             <child>
               <object class="GtkShortcutsShortcut">
                 <property name="visible">True</property>
                 <property name="title" translatable="yes" context="shortcut window">Next track</property>
-                <property name="accelerator">n</property>
+                <property name="accelerator">&lt;Alt&gt;n</property>
               </object>
             </child>
             <child>
               <object class="GtkShortcutsShortcut">
                 <property name="visible">True</property>
                 <property name="title" translatable="yes" context="shortcut window">Previous track</property>
-                <property name="accelerator">p</property>
+                <property name="accelerator">&lt;Alt&gt;p</property>
               </object>
             </child>
             <child>
@@ -147,28 +140,35 @@
               <object class="GtkShortcutsShortcut">
                 <property name="visible">True</property>
                 <property name="title" translatable="yes" context="shortcut window">Love current track</property>
-                <property name="accelerator">l</property>
+                <property name="accelerator">&lt;Alt&gt;l</property>
               </object>
             </child>
             <child>
               <object class="GtkShortcutsShortcut">
                 <property name="visible">True</property>
                 <property name="title" translatable="yes" context="shortcut window">Repeat track</property>
-                <property name="accelerator">&lt;Shift&gt;</property>
+                <property name="accelerator">&lt;Alt&gt;</property>
               </object>
             </child>
             <child>
               <object class="GtkShortcutsShortcut">
                 <property name="visible">True</property>
                 <property name="title" translatable="yes" context="shortcut window">Skip backward in track</property>
-                <property name="accelerator">Left</property>
+                <property name="accelerator">&lt;Alt&gt;Left</property>
               </object>
             </child>
             <child>
               <object class="GtkShortcutsShortcut">
                 <property name="visible">True</property>
                 <property name="title" translatable="yes" context="shortcut window">Skip forward in track</property>
-                <property name="accelerator">Right</property>
+                <property name="accelerator">&lt;Alt&gt;Right</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="visible">True</property>
+                <property name="title" translatable="yes" context="shortcut window">Enable/disable scrobbling</property>
+                <property name="accelerator">&lt;Primary&gt;&lt;Shift&gt;S</property>
               </object>
             </child>
           </object>

@@ -13,7 +13,6 @@
 from gi.repository import Gst, GstPbutils, GLib, Gio
 
 from re import match
-
 from gettext import gettext as _
 
 from lollypop.define import App, ENCODING
@@ -116,7 +115,7 @@ class TagReader(Discoverer):
         """
         if tags is None:
             return ""
-        (exists, album_id) = tags.get_string_index('musicbrainz-albumid', 0)
+        (exists, album_id) = tags.get_string_index("musicbrainz-albumid", 0)
         return album_id or ""
 
     def get_mb_track_id(self, tags):
@@ -127,9 +126,20 @@ class TagReader(Discoverer):
         """
         if tags is None:
             return ""
-        (exists, recording_id) = tags.get_string_index('musicbrainz-trackid',
+        (exists, recording_id) = tags.get_string_index("musicbrainz-trackid",
                                                        0)
         return recording_id or ""
+
+    def get_version(self, tags):
+        """
+            Get recording version
+            @param tags as Gst.TagList
+            @return str
+        """
+        if tags is None:
+            return ""
+        (exists, version) = tags.get_string_index("version", 0)
+        return version or ""
 
     def get_performers(self, tags):
         """
@@ -238,6 +248,9 @@ class TagReader(Discoverer):
         discname = ""
         for i in range(tags.get_tag_size("extended-comment")):
             (exists, read) = tags.get_string_index("extended-comment", i)
+            if exists and read.startswith("PART"):
+                discname = "=".join(read.split("=")[1:])
+                break
             if exists and read.startswith("DISCSUBTITLE"):
                 discname = "=".join(read.split("=")[1:])
                 break
@@ -283,24 +296,36 @@ class TagReader(Discoverer):
         """
             Return track year for tags
             @param tags as Gst.TagList
-            @return track year as int or None
+            @return year and timestamp (int, int)
         """
-        if tags is None:
-            return None
-        (exists, date) = tags.get_date_index("date", 0)
-        if not exists:
-            (exists, date) = tags.get_date_time_index("datetime", 0)
-        if exists:
-            year = date.get_year()
-        else:
-            year = None
-        return year
+        try:
+            (exists, date) = tags.get_date_index("date", 0)
+            dt = year = timestamp = None
+            if exists:
+                year = date.get_year()
+                d = Gst.DateTime.new_local_time(year, 1, 1, 0, 0, 0)
+                dt = d.to_g_date_time()
+                timestamp = dt.to_unix()
+            else:
+                (exists, date) = tags.get_date_time_index("datetime", 0)
+                if exists:
+                    dt = date.to_g_date_time()
+                    if dt is None:
+                        year = date.get_year()
+                        d = Gst.DateTime.new_local_time(year, 1, 1, 0, 0, 0)
+                        dt = d.to_g_date_time()
+                    timestamp = dt.to_unix()
+            return (year, timestamp)
+        except Exception as e:
+            error = "" if tags is None else tags.to_string()
+            Logger.error("TagReader::get_year(): %s, %s", e, error)
+        return (None, None)
 
     def get_original_year(self, tags):
         """
             Return original release year
             @param tags as Gst.TagList
-            @return year as int or None
+            @return year and timestamp (int, int)
         """
         def get_id3():
             try:
@@ -317,10 +342,12 @@ class TagReader(Discoverer):
                     string = m.data.decode("utf-8")
                     if string.startswith("TDOR"):
                         split = string.split("\x00")
-                        return int(split[-1][:4])
+                        date = split[-1]
+                        datetime = GLib.DateTime.new_from_iso8601(date, None)
+                        return (datetime.year(), datetime.to_unix())
             except:
                 pass
-            return None
+            return (None, None)
 
         def get_ogg():
             try:
@@ -331,18 +358,19 @@ class TagReader(Discoverer):
                         i)
                     if not exists or not sample.startswith("ORIGINALDATE="):
                         continue
-                    # ORIGINALDATE=1999-03-10 => Only year
-                    return int(sample[13:][:4])
+                    date = sample[13:]
+                    datetime = GLib.DateTime.new_from_iso8601(date, None)
+                    return (datetime.year(), datetime.to_unix())
             except:
                 pass
             return None
 
         if tags is None:
             return None
-        year = get_id3()
-        if year is None:
-            year = get_ogg()
-        return year
+        values = get_id3()
+        if values is None:
+            values = get_ogg()
+        return values
 
     def get_lyrics(self, tags):
         """
@@ -359,16 +387,23 @@ class TagReader(Discoverer):
                     else:
                         return None
                 elif bytes[0:4] == b"USLT":
-                    lyrics = bytes.split(b"\xff\xfe")[2].replace(b"\x00", b"")
+                    # This code sucks, if someone know how to handle this
+                    # UTF8
+                    lyrics = bytes.split(b"\x00")[-1]
+                    # UTF-16
+                    if not lyrics:
+                        lyrics = bytes.split(
+                            b"\xff\xfe")[2].replace(b"\x00", b"")
                 else:
                     return None
                 for encoding in ENCODING:
                     try:
                         return lyrics.decode(encoding)
-                    except:
-                        pass
-            except:
-                pass
+                    except Exception as e:
+                        Logger.warning("TagReader::get_lyrics(ENCODING): %s",
+                                       e)
+            except Exception as e:
+                Logger.warning("TagReader::get_lyrics(): %s", e)
             return None
 
         def get_mp4():
@@ -459,11 +494,10 @@ class TagReader(Discoverer):
             @param artists as [string]
             @param sortnames as [string]
             @param artist ids as int
-            @return ([int], [int])
+            @return [int]
             @commit needed
         """
         artist_ids = []
-        new_artist_ids = []
         sortsplit = sortnames.split(";")
         sortlen = len(sortsplit)
         i = 0
@@ -480,12 +514,11 @@ class TagReader(Discoverer):
                     if sortname is None:
                         sortname = format_artist_name(artist)
                     artist_id = App().artists.add(artist, sortname)
-                    new_artist_ids.append(artist_id)
                 elif sortname is not None:
                     App().artists.set_sortname(artist_id, sortname)
                 i += 1
                 artist_ids.append(artist_id)
-        return (artist_ids, new_artist_ids)
+        return artist_ids
 
     def add_genres(self, genres):
         """
@@ -496,7 +529,6 @@ class TagReader(Discoverer):
         """
         # Get all genre ids
         genre_ids = []
-        new_genre_ids = []
         for genre in genres.split(";"):
             genre = genre.strip()
             if genre != "":
@@ -504,9 +536,8 @@ class TagReader(Discoverer):
                 genre_id = App().genres.get_id(genre)
                 if genre_id is None:
                     genre_id = App().genres.add(genre)
-                    new_genre_ids.append(genre_id)
                 genre_ids.append(genre_id)
-        return (genre_ids, new_genre_ids)
+        return genre_ids
 
     def add_album(self, album_name, mb_album_id, artist_ids,
                   uri, loved, popularity, rate, mtime):
@@ -520,23 +551,18 @@ class TagReader(Discoverer):
             @param popularity as int
             @param rate as int
             @param mtime as int
-            @return (album id as int, new as bool)
+            @return album_id as int
             @commit needed
         """
         f = Gio.File.new_for_uri(uri)
         d = f.get_parent()
-        if d is not None:
-            parent_uri = d.get_uri()
-        else:
-            parent_uri = ""
-        new = False
+        parent_uri = "/" if d is None else d.get_uri()
         album_id = App().albums.get_id(album_name, mb_album_id, artist_ids)
         if album_id is None:
-            new = True
             album_id = App().albums.add(album_name, mb_album_id, artist_ids,
                                         parent_uri, loved, popularity,
                                         rate, mtime)
         # Now we have our album id, check if path doesn"t change
         if App().albums.get_uri(album_id) != parent_uri:
             App().albums.set_uri(album_id, parent_uri)
-        return (album_id, new)
+        return album_id

@@ -19,7 +19,6 @@ from lollypop.define import App
 from lollypop.logger import Logger
 from lollypop.database import Database
 from lollypop.database_history import History
-from lollypop.helper_dbus import DBusHelper
 
 
 class Settings(Gio.Settings):
@@ -143,11 +142,8 @@ class SettingsDialog:
 
         switch_artwork_tags = builder.get_object("switch_artwork_tags")
         grid_behaviour = builder.get_object("grid_behaviour")
-        # Check portal for kid3-cli
-        dbus_helper = DBusHelper()
-        dbus_helper.call("CanSetCover", None,
-                         self.__on_can_set_cover,
-                         (switch_artwork_tags, grid_behaviour))
+        # Check for kid3-cli
+        self.__check_for_kid3(switch_artwork_tags, grid_behaviour)
 
         switch_genres = builder.get_object("switch_genres")
         switch_genres.set_state(App().settings.get_value("show-genres"))
@@ -172,7 +168,7 @@ class SettingsDialog:
         combo_preview = builder.get_object("combo_preview")
 
         scale_coversize = builder.get_object("scale_coversize")
-        scale_coversize.set_range(150, 300)
+        scale_coversize.set_range(170, 300)
         scale_coversize.set_value(
             App().settings.get_value("cover-size").get_int32())
         self.__settings_dialog.connect("destroy", self.__edit_settings_close)
@@ -205,7 +201,7 @@ class SettingsDialog:
             if filename:
                 uri = GLib.filename_to_uri(filename)
             else:
-                uri = ""
+                uri = "/opt"
 
         self.__main_chooser.set_dir(uri)
 
@@ -319,11 +315,6 @@ class SettingsDialog:
             @param widget as Gtk.Switch
             @param state as bool
         """
-        if not state:
-            App().settings.set_value("list-one-ids",
-                                     GLib.Variant("ai", []))
-            App().settings.set_value("list-two-ids",
-                                     GLib.Variant("ai", []))
         App().settings.set_value("save-state",
                                  GLib.Variant("b", state))
 
@@ -333,9 +324,9 @@ class SettingsDialog:
             @param widget as Gtk.Switch
             @param state as bool
         """
-        App().window.container.show_genres(state)
         App().settings.set_value("show-genres",
                                  GLib.Variant("b", state))
+        App().window.container.show_genres(state)
 
     def _on_transitions_button_clicked(self, widget):
         """
@@ -416,7 +407,16 @@ class SettingsDialog:
         """
         App().settings.set_value("artist-artwork",
                                  GLib.Variant("b", state))
-        App().window.container.reload_view()
+        if App().settings.get_value("show-sidebar"):
+            App().window.container.list_one.redraw()
+            App().window.container.list_two.redraw()
+        else:
+            from lollypop.view_artists_rounded import RoundedArtistsView
+            for child in App().window.container.stack.get_children():
+                if isinstance(child, RoundedArtistsView):
+                    child.destroy()
+                    break
+            App().window.container.reload_view()
         if state:
             App().art.cache_artists_info()
 
@@ -479,6 +479,8 @@ class SettingsDialog:
             Test lastfm connection
             @param button as Gtk.Button
         """
+        App().settings.set_value("lastfm-loved-status",
+                                 GLib.Variant("b", False))
         self.__update_fm_settings("lastfm")
         if not Gio.NetworkMonitor.get_default().get_network_available():
             self.__lastfm_test_image.set_from_icon_name(
@@ -597,9 +599,22 @@ class SettingsDialog:
         renderer = combo.get_cells()[0]
         renderer.set_property("ellipsize", Pango.EllipsizeMode.END)
         renderer.set_property("max-width-chars", 60)
-        dbus_helper = DBusHelper()
-        dbus_helper.call("PaListSinks", None,
-                         self.__on_pa_list_sinks, combo)
+        if GLib.find_program_in_path("flatpak-spawn") is not None:
+            argv = ["flatpak-spawn", "--host", "pacmd", "list-sinks"]
+        else:
+            argv = ["pacmd", "list-sinks"]
+        try:
+            (pid, stdin, stdout, stderr) = GLib.spawn_async(
+                argv, flags=GLib.SpawnFlags.SEARCH_PATH |
+                GLib.SpawnFlags.DO_NOT_REAP_CHILD,
+                standard_input=False,
+                standard_output=True,
+                standard_error=False
+            )
+            GLib.child_watch_add(GLib.PRIORITY_DEFAULT_IDLE, pid,
+                                 self.__on_pacmd_result, stdout, combo)
+        except Exception as e:
+            Logger.error("SettingsDialog::__set_outputs(): %s" % e)
 
     def __add_chooser(self, directory=None):
         """
@@ -610,7 +625,7 @@ class SettingsDialog:
         image = Gtk.Image.new_from_icon_name("list-remove-symbolic",
                                              Gtk.IconSize.MENU)
         chooser.set_icon(image)
-        if directory:
+        if directory is not None:
             chooser.set_dir(directory)
         self.__flowbox.add(chooser)
 
@@ -654,8 +669,6 @@ class SettingsDialog:
         self.__settings_dialog.destroy()
         if set(previous) != set(uris):
             App().scanner.update()
-        if App().window.container.view is not None:
-            App().window.container.view.update_children()
 
     def __test_lastfm_connection(self, result, fm):
         """
@@ -687,6 +700,31 @@ class SettingsDialog:
                 "computer-fail-symbolic",
                 Gtk.IconSize.MENU)
 
+    def __on_pacmd_result(self, pid, status, stdout, combo):
+        """
+            Read output and set combobox
+            @param pid as int
+            @param status as bool
+            @param stdout as int
+            @param combo as Gtk.ComboBox
+        """
+        from re import findall, DOTALL
+        GLib.spawn_close_pid(pid)
+        io = GLib.IOChannel.unix_new(stdout)
+        [status, data] = io.read_to_end()
+        if data:
+            string = data.decode("utf-8")
+            current = App().settings.get_value("preview-output").get_string()
+            devices = findall('name: <([^>]*)>', string, DOTALL)
+            names = findall('device.description = "([^"]*)"', string, DOTALL)
+            if names:
+                for i in range(0, len(names)):
+                    combo.append(devices[i], names[i])
+                    if devices[i] == current:
+                        combo.set_active_id(devices[i])
+            else:
+                combo.set_sensitive(False)
+
     def __on_password_store(self, source, result, fm, callback):
         """
             Connect service
@@ -697,53 +735,25 @@ class SettingsDialog:
         """
         fm.connect(True, callback, fm)
 
-    def __on_pa_list_sinks(self, source, result, combo):
-        """
-            Populate combo
-            @param source as GObject.Object
-            @param result as Gio.AsyncResult
-            @param combo as Gtk.ComboBoxText
-        """
-        current = App().settings.get_value("preview-output").get_string()
-        try:
-            outputs = source.call_finish(result)[0]
-        except:
-            outputs = []
-        if outputs:
-            for output in outputs:
-                combo.append(output[1], output[0])
-                if output[1] == current:
-                    combo.set_active_id(output[1])
-        else:
-            combo.set_sensitive(False)
-
-    def __on_can_set_cover(self, source, result, data):
+    def __check_for_kid3(self, switch, grid):
         """
             Update grid/switch based on result
-            @param source as GObject.Object
-            @param result as Gio.AsyncResult
-            @param data as (Gtk.Switch, Gtk.Grid)
+            @param switch as Gtk.Switch
+            @param grid as Gtk.Grid
         """
-        try:
-            can_set_cover = source.call_finish(result)
-        except:
-            can_set_cover = False
-        switch_artwork_tags = data[0]
-        if not can_set_cover:
-            grid = data[1]
-            h = grid.child_get_property(switch_artwork_tags, "height")
-            w = grid.child_get_property(switch_artwork_tags, "width")
-            l = grid.child_get_property(switch_artwork_tags, "left-attach")
-            t = grid.child_get_property(switch_artwork_tags, "top-attach")
-            switch_artwork_tags.destroy()
+        if not App().art.kid3_available:
+            h = grid.child_get_property(switch, "height")
+            w = grid.child_get_property(switch, "width")
+            l = grid.child_get_property(switch, "left-attach")
+            t = grid.child_get_property(switch, "top-attach")
+            switch.destroy()
             label = Gtk.Label.new(_("You need to install kid3-cli"))
             label.get_style_context().add_class("dim-label")
             label.set_property("halign", Gtk.Align.END)
             label.show()
             grid.attach(label, l, t, w, h)
         else:
-            switch_artwork_tags.set_state(
-                App().settings.get_value("save-to-tags"))
+            switch.set_state(App().settings.get_value("save-to-tags"))
 
     def __on_get_password(self, attributes, password, name):
         """
@@ -779,11 +789,13 @@ class SettingsDialog:
             ltime = App().tracks.get_ltime(track_id)
             mtime = App().tracks.get_mtime(track_id)
             duration = App().tracks.get_duration(track_id)
-            loved = App().albums.get_loved(album_id)
+            loved_track = App().tracks.get_loved(track_id)
+            loved_album = App().albums.get_loved(album_id)
             album_popularity = App().albums.get_popularity(album_id)
             album_rate = App().albums.get_rate(album_id)
             history.add(name, duration, popularity, rate,
-                        ltime, mtime, loved, album_popularity, album_rate)
+                        ltime, mtime, loved_track, loved_album,
+                        album_popularity, album_rate)
             self.__progress.set_fraction((count - len(track_ids)) / count)
             GLib.idle_add(self.__reset_database, track_ids,
                           count, history)

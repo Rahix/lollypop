@@ -29,8 +29,7 @@ from gettext import gettext as _
 from locale import getdefaultlocale
 import re
 
-from lollypop.helper_task import TaskHelper
-from lollypop.define import App, Type
+from lollypop.define import App
 from lollypop.objects import Track
 from lollypop.logger import Logger
 from lollypop.goa import GoaSyncedAccount
@@ -75,7 +74,7 @@ class LastFM(LastFMNetwork, LibreFMNetwork):
             LastFMNetwork.__init__(self,
                                    api_key=self.__API_KEY,
                                    api_secret=self.__API_SECRET)
-        self.connect()
+        self.connect(True)
 
     def connect(self, full_sync=False, callback=None, *args):
         """
@@ -84,8 +83,7 @@ class LastFM(LastFMNetwork, LibreFMNetwork):
             @param callback as function
         """
         if self.is_goa:
-            helper = TaskHelper()
-            helper.run(self.__connect, full_sync)
+            App().task_helper.run(self.__connect, full_sync)
         elif Gio.NetworkMonitor.get_default().get_network_available():
             from lollypop.helper_passwords import PasswordsHelper
             helper = PasswordsHelper()
@@ -133,8 +131,8 @@ class LastFM(LastFMNetwork, LibreFMNetwork):
         if Gio.NetworkMonitor.get_default().get_network_available() and\
                 self.available:
             self.__clean_queue()
-            helper = TaskHelper()
-            helper.run(self.__scrobble,
+            App().task_helper.run(
+                       self.__scrobble,
                        ", ".join(track.artists),
                        track.album_name,
                        track.title,
@@ -150,8 +148,8 @@ class LastFM(LastFMNetwork, LibreFMNetwork):
         """
         if Gio.NetworkMonitor.get_default().get_network_available() and\
                 track.id > 0 and self.available:
-            helper = TaskHelper()
-            helper.run(self.__now_playing,
+            App().task_helper.run(
+                       self.__now_playing,
                        ", ".join(track.artists),
                        track.album_name,
                        track.title,
@@ -216,11 +214,11 @@ class LastFM(LastFMNetwork, LibreFMNetwork):
         """
             Add or remove track from loved playlist on Last.fm
             @param track as Track
-            @param loved Add to loved playlist if `True`; remove if `False`
+            @param loved as bool
         """
         if Gio.NetworkMonitor.get_default().get_network_available() and\
                 self.available:
-            if loved:
+            if loved == 1:
                 self.love(",".join(track.artists), track.name)
             else:
                 self.unlove(",".join(track.artists), track.name)
@@ -264,8 +262,8 @@ class LastFM(LastFMNetwork, LibreFMNetwork):
         """
         if self.__queue:
             (track, timestamp) = self.__queue.pop(0)
-            helper = TaskHelper()
-            helper.run(self.__scrobble,
+            App().task_helper.run(
+                       self.__scrobble,
                        ", ".join(track.artists),
                        track.album_name,
                        track.title,
@@ -292,8 +290,7 @@ class LastFM(LastFMNetwork, LibreFMNetwork):
                     username=self.__login,
                     password_hash=md5(self.__password))
             if full_sync:
-                helper = TaskHelper()
-                helper.run(self.__populate_loved_tracks)
+                App().task_helper.run(self.__populate_loved_tracks)
         except Exception as e:
             Logger.debug("LastFM::__connect(): %s" % e)
 
@@ -310,6 +307,8 @@ class LastFM(LastFMNetwork, LibreFMNetwork):
             @param first is internal
             @thread safe
         """
+        if App().settings.get_value("disable-scrobbling"):
+            return
         Logger.debug("LastFM::__scrobble(): %s, %s, %s, %s, %s" % (
                                                             artist,
                                                             album,
@@ -343,6 +342,8 @@ class LastFM(LastFMNetwork, LibreFMNetwork):
             @param first is internal
             @thread safe
         """
+        if App().settings.get_value("disable-scrobbling"):
+            return
         try:
             self.update_now_playing(artist=artist,
                                     album=album,
@@ -365,18 +366,19 @@ class LastFM(LastFMNetwork, LibreFMNetwork):
         """
             Populate loved tracks playlist
         """
-        if not self.available:
+        if not self.available or\
+                App().settings.get_value("lastfm-loved-status"):
             return
         try:
-            tracks = []
             user = self.get_user(self.__login)
             for loved in user.get_loved_tracks():
                 track_id = App().tracks.search_track(
                     str(loved.track.artist),
                     str(loved.track.title))
                 if track_id is not None:
-                    tracks.append(Track(track_id))
-            App().playlists.add_tracks(Type.LOVED, tracks)
+                    Track(track_id).set_loved(1)
+            App().settings.set_value("lastfm-loved-status",
+                                     GLib.Variant("b", True))
         except Exception as e:
             Logger.error("LastFM::__populate_loved_tracks: %s" % e)
 
@@ -395,5 +397,5 @@ class LastFM(LastFMNetwork, LibreFMNetwork):
         self.__login = attributes["login"]
         self.__password = password
         if Gio.NetworkMonitor.get_default().get_network_available():
-            helper = TaskHelper()
-            helper.run(self.__connect, full_sync, callback=(callback, *args))
+            App().task_helper.run(self.__connect, full_sync,
+                                  callback=(callback, *args))

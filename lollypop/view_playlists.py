@@ -10,60 +10,70 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-from gi.repository import Gtk, GLib, Gdk, Gio
+from gi.repository import Gtk, GLib, Gio
 
 from gettext import gettext as _
+from random import shuffle
 
 from lollypop.view import View
-from lollypop.widgets_playlist import PlaylistsWidget, PlaylistEditWidget
-from lollypop.widgets_playlist import PlaylistsManagerWidget
-from lollypop.define import App, Type, ArtSize
-from lollypop.objects import Track
+from lollypop.widgets_playlist import PlaylistsWidget
+from lollypop.define import App, Type, RowListType
+from lollypop.controller_view import ViewController, ViewControllerType
 
 
-class PlaylistsView(View):
+class PlaylistsView(View, ViewController):
     """
         Show playlist tracks
     """
 
-    def __init__(self, playlist_ids, editable=True):
+    def __init__(self, playlist_ids, list_type, editable=True):
         """
             Init PlaylistView
             @parma playlist ids as [int]
+            @param list_type as RowListType
             @param editable as bool
         """
         View.__init__(self, True)
-        self.__autoscroll_timeout_id = None
-        self.__prev_animated_rows = []
-        self.__track_ids = []
+        ViewController.__init__(self, ViewControllerType.ALBUM)
+        self.__list_type = list_type
         self.__playlist_ids = playlist_ids
-        self.__signal_id1 = App().playlists.connect("playlist-add",
-                                                    self.__on_playlist_add)
-        self.__signal_id2 = App().playlists.connect("playlist-del",
-                                                    self.__on_playlist_del)
+        self.__signal_id1 = App().playlists.connect(
+                                            "playlist-track-added",
+                                            self.__on_playlist_track_added)
+        self.__signal_id2 = App().playlists.connect(
+                                            "playlist-track-removed",
+                                            self.__on_playlist_track_removed)
 
         builder = Gtk.Builder()
         builder.add_from_resource("/org/gnome/Lollypop/PlaylistView.ui")
+        self.__header = builder.get_object("header")
+        self.__play_button = builder.get_object("play_button")
+        self.__shuffle_button = builder.get_object("shuffle_button")
+        if App().player.is_locked:
+            self.__play_button.set_sensitive(False)
+            self.__shuffle_button.set_sensitive(False)
         self.__duration_label = builder.get_object("duration")
         builder.get_object("title").set_label(
             ", ".join(App().playlists.get_names(playlist_ids)))
 
-        self.__edit_button = builder.get_object("edit-button")
-        self.__jump_button = builder.get_object("jump-button")
-        split_button = builder.get_object("split-button")
+        self.__jump_button = builder.get_object("jump_button")
+        self.__split_button = builder.get_object("split_button")
+        smart_button = builder.get_object("smart_button")
+
         if editable:
-            split_button.set_active(not App().settings.get_value("split-view"))
+            self.__split_button.set_active(not App().settings.get_value(
+                "split-view"))
         else:
-            split_button.hide()
+            self.__jump_button.set_hexpand(True)
+            self.__split_button.hide()
+            self.__play_button.hide()
+            self.__shuffle_button.hide()
+        if not editable or len(playlist_ids) > 1 or playlist_ids[0] < 0:
+            smart_button.hide()
 
-        if len(playlist_ids) > 1 or (
-           playlist_ids[0] < 0 and playlist_ids[0] not in [Type.LOVED,
-                                                           Type.NOPARTY]) or\
-                not editable:
-            self.__edit_button.hide()
-
-        self.__playlists_widget = PlaylistsWidget(playlist_ids)
+        self.__playlists_widget = PlaylistsWidget(playlist_ids, list_type)
         self.__playlists_widget.set_filter_func(self._filter_func)
+        self.__playlists_widget.connect("populated", self.__on_populated)
         self.__playlists_widget.show()
         self.add(builder.get_object("widget"))
         self._viewport.add(self.__playlists_widget)
@@ -73,69 +83,26 @@ class PlaylistsView(View):
         # "split-button" will emit a signal otherwise
         builder.connect_signals(self)
 
-        self.drag_dest_set(Gtk.DestDefaults.DROP | Gtk.DestDefaults.MOTION,
-                           [], Gdk.DragAction.MOVE)
-        self.drag_dest_add_text_targets()
-        self.connect("drag-motion", self.__on_drag_motion)
-
-        # No duration for non user playlists
-        # FIXME
+        # In DB duration calculation
         if playlist_ids[0] > 0:
-            self.__set_duration()
+            duration = 0
+            for playlist_id in self.__playlist_ids:
+                duration += App().playlists.get_duration(playlist_id)
+            self.__set_duration(duration)
+        # Ask widget after populated
+        else:
+            self.__playlists_widget.connect("populated",
+                                            self.__on_playlist_populated)
+        self.__playlists_widget.connect("orientation-changed",
+                                        self.__on_orientation_changed)
 
-    def populate(self, track_ids):
+    def populate(self, tracks):
         """
             Populate view with tracks from playlist
-            @param track_ids as [int]
+            @param tracks as [track]
         """
-        # We are looking for middle
-        # Ponderate with this:
-        # Tracks with cover == 2
-        # Tracks without cover == 1
-        prev_album_id = None
-        heights = {}
-        total = 0
-        idx = 0
-        for track_id in track_ids:
-            track = Track(track_id)
-            if track.album_id != prev_album_id:
-                heights[idx] = 2
-                total += 2
-            else:
-                heights[idx] = 1
-                total += 1
-            prev_album_id = track.album_id
-            idx += 1
-        half = int(total / 2 + 0.5)
-        mid_tracks = 1
-        count = 0
-        for height in heights.values():
-            count += height
-            if count >= half:
-                break
-            mid_tracks += 1
-        self.__track_ids = track_ids
+        self.__playlists_widget.populate(tracks)
         self.__update_jump_button()
-        self.__playlists_widget.populate_list_left(track_ids[:mid_tracks],
-                                                   1)
-        self.__playlists_widget.populate_list_right(track_ids[mid_tracks:],
-                                                    mid_tracks + 1)
-
-    def clear_animation(self):
-        """
-            Clear any animation
-        """
-        for row in self.__prev_animated_rows:
-            ctx = row.get_style_context()
-            ctx.remove_class("drag-up")
-            ctx.remove_class("drag-down")
-
-    def get_ids(self):
-        """
-            Return playlist ids
-            @return id as [int]
-        """
-        return self.__playlist_ids
 
     def stop(self):
         """
@@ -144,16 +111,24 @@ class PlaylistsView(View):
         self.__playlists_widget.stop()
 
     @property
-    def children(self):
+    def playlist_ids(self):
         """
-            Return view children
-            @return [PlaylistsWidget]
+            Return playlist ids
+            @return id as [int]
         """
-        return [self.__playlists_widget]
+        return self.__playlist_ids
 
 #######################
 # PROTECTED           #
 #######################
+    def _on_current_changed(self, player):
+        """
+            Update children state
+            @param player as Player
+        """
+        self.__update_jump_button()
+        self.__playlists_widget.set_playing_indicator()
+
     def _on_search_changed(self, entry):
         """
             Update filter
@@ -193,13 +168,6 @@ class PlaylistsView(View):
         if y is not None:
             self._scrolled.get_vadjustment().set_value(y)
 
-    def _on_edit_button_clicked(self, button):
-        """
-            Edit playlist
-            @param button as Gtk.Button
-        """
-        App().window.container.show_playlist_editor(self.__playlist_ids[0])
-
     def _on_save_button_clicked(self, button):
         """
             Save playlist as file
@@ -220,72 +188,79 @@ class PlaylistsView(View):
         filechooser.connect("response", self.__on_save_response)
         filechooser.run()
 
-    def _on_current_changed(self, player):
+    def _on_play_button_clicked(self, button):
         """
-            Current song changed, update playing button
-            @param player as Player
+            Play playlist
+            @param button as Gtk.Button
         """
-        View._on_current_changed(self, player)
-        self.__update_jump_button()
+        tracks = []
+        for child in self.__playlists_widget.children:
+            tracks.append(child.track)
+        if tracks:
+            App().player.load(tracks[0])
+            App().player.populate_playlist_by_tracks(tracks,
+                                                     self.__playlist_ids)
+
+    def _on_shuffle_button_clicked(self, button):
+        """
+            Play playlist shuffled
+            @param button as Gtk.Button
+        """
+        tracks = []
+        for child in self.__playlists_widget.children:
+            tracks.append(child.track)
+        if tracks:
+            shuffle(tracks)
+            App().player.load(tracks[0])
+            App().player.populate_playlist_by_tracks(tracks,
+                                                     self.__playlist_ids)
+
+    def _on_smart_button_clicked(self, button):
+        """
+            Edit smart playlist
+            @param button as Gtk.Button
+        """
+        App().window.container.show_smart_playlist_editor(
+            self.__playlist_ids[0])
+
+    def _on_map(self, widget):
+        """
+            Set active ids
+        """
+        App().settings.set_value("state-one-ids",
+                                 GLib.Variant("ai", [Type.PLAYLISTS]))
+        App().settings.set_value("state-two-ids",
+                                 GLib.Variant("ai", self.__playlist_ids))
 
 #######################
 # PRIVATE             #
 #######################
-    def __auto_scroll(self, up):
-        """
-            Auto scroll up/down
-            @param up as bool
-        """
-        adj = self._scrolled.get_vadjustment()
-        value = adj.get_value()
-        if up:
-            adj_value = value - ArtSize.SMALL
-            adj.set_value(adj_value)
-            if adj.get_value() == 0:
-                self.__autoscroll_timeout_id = None
-                self.get_style_context().remove_class("drag-down")
-                self.get_style_context().remove_class("drag-up")
-                return False
-            else:
-                self.get_style_context().add_class("drag-up")
-                self.get_style_context().remove_class("drag-down")
-        else:
-            adj_value = value + ArtSize.SMALL
-            adj.set_value(adj_value)
-            if adj.get_value() < adj_value:
-                self.__autoscroll_timeout_id = None
-                self.get_style_context().remove_class("drag-down")
-                self.get_style_context().remove_class("drag-up")
-                return False
-            else:
-                self.get_style_context().add_class("drag-down")
-                self.get_style_context().remove_class("drag-up")
-        return True
-
-    def __set_duration(self):
+    def __set_duration(self, duration):
         """
             Set playlist duration
+            @param duration as int (seconds)
         """
-        duration = 0
-        for playlist_id in self.__playlist_ids:
-            duration += App().playlists.get_duration(playlist_id)
-
         hours = int(duration / 3600)
         mins = int(duration / 60)
         if hours > 0:
             mins -= hours * 60
             if mins > 0:
+                # Duration hour minute
                 self.__duration_label.set_text(_("%s h  %s m") % (hours, mins))
             else:
+                # Duration hour minute
                 self.__duration_label.set_text(_("%s h") % hours)
         else:
+            # Duration hour minute
             self.__duration_label.set_text(_("%s m") % mins)
 
     def __update_jump_button(self):
         """
             Update jump button status
         """
-        if App().player.current_track.id in self.__track_ids:
+        track_ids = [child.track.id
+                     for child in self.__playlists_widget.children]
+        if App().player.current_track.id in track_ids:
             self.__jump_button.set_sensitive(True)
         else:
             self.__jump_button.set_sensitive(False)
@@ -315,143 +290,55 @@ class PlaylistsView(View):
         except:
             pass
 
-    def __on_drag_motion(self, widget, context, x, y, time):
+    def __on_populated(self, playlists_widget):
         """
-            Add style
+            Update jump button on populated
+            @param playlists_widget as PlaylistsWidget
+        """
+        self.__update_jump_button()
+
+    def __on_playlist_track_added(self, playlists, playlist_id, uri, pos):
+        """
+            Update tracks widgets
+            @param playlists as Playlists
+            @param playlist id as int
+            @param uri as str
+            @param pos as int
+        """
+        if len(self.__playlist_ids) == 1 and\
+                playlist_id in self.__playlist_ids:
+            track_id = App().tracks.get_id_by_uri(uri)
+            self.__playlists_widget.append(track_id)
+
+    def __on_playlist_track_removed(self, playlists, playlist_id, uri, pos):
+        """
+            Update tracks widgets
+            @param playlists as Playlists
+            @param playlist id as int
+            @param uri as str
+            @param pos as int
+        """
+        if len(self.__playlist_ids) == 1 and\
+                playlist_id in self.__playlist_ids:
+            track_id = App().tracks.get_id_by_uri(uri)
+            self.__playlists_widget.remove(track_id, pos)
+
+    def __on_playlist_populated(self, widget):
+        """
+            Set duration on populated
+            @param widget as PlaylistsWidget
+        """
+        self.__set_duration(widget.duration)
+
+    def __on_orientation_changed(self, widget, orientation):
+        """
+            Show/Hide split button
             @param widget as Gtk.Widget
-            @param context as Gdk.DragContext
-            @param x as int
-            @param y as int
-            @param time as int
+            @param orientation as Gtk.Orientation
         """
-        auto_scroll = False
-        up = y <= ArtSize.MEDIUM
-        if up:
-            auto_scroll = True
-        elif y >= self._scrolled.get_allocated_height() - ArtSize.MEDIUM:
-            auto_scroll = True
+        if orientation == Gtk.Orientation.VERTICAL and (
+                App().window.is_adaptive or
+                self.__list_type & RowListType.POPOVER):
+            self.__split_button.hide()
         else:
-            self.get_style_context().remove_class("drag-down")
-            self.get_style_context().remove_class("drag-up")
-            if self.__autoscroll_timeout_id is not None:
-                GLib.source_remove(self.__autoscroll_timeout_id)
-                self.__autoscroll_timeout_id = None
-            self.clear_animation()
-            row = self.__playlists_widget.rows_animation(x, y, self)
-            if row is not None:
-                self.__prev_animated_rows.append(row)
-            return
-        if self.__autoscroll_timeout_id is None and auto_scroll:
-            self.clear_animation()
-            self.__autoscroll_timeout_id = GLib.timeout_add(100,
-                                                            self.__auto_scroll,
-                                                            up)
-
-    def __on_playlist_add(self, manager, playlist_id, track_id, pos):
-        """
-            Update tracks widgets
-            @param manager as PlaylistsManager
-            @param playlist id as int
-            @param track id as int
-        """
-        if playlist_id in self.__playlist_ids:
-            self.__playlists_widget.insert(track_id, pos)
-
-    def __on_playlist_del(self, manager, playlist_id, track_id):
-        """
-            Update tracks widgets
-            @param manager as PlaylistsManager
-            @param playlist id as int
-            @param track id as int
-        """
-        if playlist_id in self.__playlist_ids:
-            self.__playlists_widget.remove(track_id)
-
-
-class PlaylistsManageView(View):
-    """
-        Playlist view used to manage playlists
-    """
-
-    def __init__(self, object):
-        """
-            Init View
-            @param object as Track/Album/Disc
-        """
-        View.__init__(self)
-        builder = Gtk.Builder()
-        builder.add_from_resource(
-            "/org/gnome/Lollypop/PlaylistsManagerView.ui")
-        if object is not None:
-            builder.get_object("back_btn").show()
-        builder.connect_signals(self)
-        self.__manage_widget = PlaylistsManagerWidget(object)
-        self.__manage_widget.show()
-        self._viewport.add(self.__manage_widget)
-        self.add(builder.get_object("widget"))
-        self.add(self._scrolled)
-
-    def populate(self):
-        """
-            Populate the view
-        """
-        self.__manage_widget.populate()
-
-#######################
-# PROTECTED           #
-#######################
-    def _on_new_clicked(self, widget):
-        """
-            Add new playlist
-            @param widget as Gtk.Button
-        """
-        self.__manage_widget.add_new_playlist()
-
-    def _on_back_btn_clicked(self, button):
-        """
-            Restore previous view
-            @param button as Gtk.Button
-        """
-        App().window.container.destroy_current_view()
-
-
-class PlaylistEditView(View):
-    """
-        Playlist view used to edit playlists
-    """
-
-    def __init__(self, playlist_id):
-        """
-            Init view
-            @param playlist id as int
-            @param playlist name as int
-            @param width as int
-        """
-        View.__init__(self)
-        builder = Gtk.Builder()
-        builder.add_from_resource("/org/gnome/Lollypop/PlaylistEditView.ui")
-        builder.get_object("title").set_label(
-            App().playlists.get_name(playlist_id))
-        builder.connect_signals(self)
-        grid = builder.get_object("widget")
-        self.add(grid)
-        self.__edit_widget = PlaylistEditWidget(playlist_id)
-        self.__edit_widget.show()
-        self._viewport.add(self.__edit_widget)
-        self.add(self._scrolled)
-
-    def populate(self):
-        """
-            Populate view
-        """
-        self.__edit_widget.populate()
-
-#######################
-# PROTECTED           #
-#######################
-    def _on_back_btn_clicked(self, button):
-        """
-            Restore previous view
-            @param button as Gtk.Button
-        """
-        App().window.container.reload_view()
+            self.__split_button.show()

@@ -15,26 +15,12 @@ from gi.repository import Gtk, GLib, Gio
 from gettext import gettext as _
 import re
 
+from lollypop.loader import Loader
 from lollypop.view import View
-from lollypop.define import App
+from lollypop.define import App, SelectionListMask, Type
 from lollypop.logger import Logger
+from lollypop.selectionlist import SelectionList
 from lollypop.widgets_device import DeviceManagerWidget
-
-
-class DeviceLocked(View):
-    """
-        Show a message about locked device to users
-    """
-
-    def __init__(self):
-        """
-            Init view
-        """
-        View.__init__(self)
-        builder = Gtk.Builder()
-        builder.add_from_resource("/org/gnome/Lollypop/DeviceManagerView.ui")
-        self.add(builder.get_object("message"))
-        builder.get_object("label").set_text(_("Please unlock your device"))
 
 
 class DeviceView(View):
@@ -90,27 +76,59 @@ class DeviceView(View):
         View.__init__(self)
         self.__timeout_id = None
         self.__device = device
+        self.__selected_ids = []
         builder = Gtk.Builder()
         builder.add_from_resource("/org/gnome/Lollypop/DeviceManagerView.ui")
         self.__memory_combo = builder.get_object("memory_combo")
         self.__syncing_btn = builder.get_object("sync_btn")
-        self.__syncing_btn.set_label(_("Synchronize %s") % device.name)
+        # FIXME Wait for translation
+        _("Synchronize")
+        self.__syncing_btn.set_label(_("Synchronize %s") % "")
         builder.connect_signals(self)
-        grid = builder.get_object("device")
-        self.__warning = builder.get_object("warning")
-        self.add(grid)
         self.__device_widget = DeviceManagerWidget(self)
-        self.__device_widget.connect("sync-finished", self.__on_sync_finished)
+        self.__device_widget.mtp_sync.connect("sync-finished",
+                                              self.__on_sync_finished)
+        self.__device_widget.mtp_sync.connect("sync-errors",
+                                              self.__on_sync_errors)
         self.__device_widget.show()
-        self._viewport.add(self.__device_widget)
-        self.add(self._scrolled)
+        self.__infobar = builder.get_object("infobar")
+        self.__error_label = builder.get_object("error_label")
+        self.__paned = builder.get_object("paned")
+        self.__selection_list = SelectionList(SelectionListMask.LIST_ONE)
+        self.__selection_list.connect("item-selected", self.__on_item_selected)
+        self.__selection_list.mark_as(SelectionListMask.ARTISTS)
+        self.__selection_list.show()
+        self.__paned.add1(self.__selection_list)
+        self.__paned.add2(builder.get_object("device_view"))
+        builder.get_object("device_view").attach(self._scrolled, 0, 3, 4, 1)
+        self.add(self.__paned)
+        self.__paned.set_position(
+            App().settings.get_value("paned-device-width").get_int32())
+
+        self.__update_list_device()
         self.__sanitize_non_mtp()
 
-    def populate(self):
+    def populate(self, selected_ids=[]):
         """
             Populate combo box
+            @param selected_ids as [int]
             @thread safe
         """
+        child = self._viewport.get_child()
+        self.__selected_ids = selected_ids
+        if selected_ids:
+            if child is not None and isinstance(child, Gtk.Label):
+                child.destroy()
+                self._viewport.add(self.__device_widget)
+        elif child is None:
+            label = Gtk.Label.new(
+                _("This will remove some files on your device!"))
+            label.get_style_context().add_class("lyrics-x-large")
+            label.get_style_context().add_class("lyrics")
+            label.set_vexpand(True)
+            label.set_hexpand(True)
+            label.show()
+            self._viewport.add(label)
         files = DeviceView.get_files(self.__device.uri)
         if files:
             GLib.idle_add(self.__set_combo_text, files)
@@ -122,7 +140,7 @@ class DeviceView(View):
             Check if lollypop is syncing
             @return bool
         """
-        return self.__device_widget.is_syncing()
+        return not self.__device_widget.mtp_sync.cancellable.is_cancelled()
 
     @property
     def device(self):
@@ -132,9 +150,24 @@ class DeviceView(View):
         """
         return self.__device
 
+    @property
+    def should_destroy(self):
+        return False
+
 #######################
 # PROTECTED           #
 #######################
+    def _on_infobar_response(self, infobar, response_id):
+        """
+            Hide infobar
+            @param widget as Gtk.Infobar
+            @param reponse id as int
+        """
+        if response_id == Gtk.ResponseType.CLOSE:
+            self.__infobar.set_revealed(False)
+            # WTF?
+            GLib.timeout_add(300, self.__infobar.hide)
+
     def _on_destroy(self, widget):
         """
             Remove running timeout
@@ -150,8 +183,8 @@ class DeviceView(View):
             Start synchronisation
             @param widget as Gtk.Button
         """
-        if self.__device_widget.is_syncing():
-            self.__device_widget.cancel_sync()
+        if not self.__device_widget.mtp_sync.cancellable.is_cancelled():
+            self.__device_widget.mtp_sync.cancellable.cancel()
         elif not App().window.container.progress.is_visible():
             self.__memory_combo.hide()
             self.__syncing_btn.set_label(_("Cancel synchronization"))
@@ -165,17 +198,53 @@ class DeviceView(View):
         self.__timeout_id = None
         text = combo.get_active_text()
         uri = "%s%s/Music" % (self.__device.uri, text)
-        already_synced = Gio.File.new_for_uri(uri + "/unsync")
-        if already_synced.query_exists():
-            self.__warning.hide()
-        else:
-            self.__warning.show()
         self.__device_widget.set_uri(uri)
-        self.__device_widget.populate()
+        if self.__selected_ids:
+            self.__device_widget.populate(self.__selected_ids)
+
+    def _on_map(self, widget):
+        """
+            Set active ids
+            @param widget as Gtk.Widget
+        """
+        App().settings.set_value("state-one-ids",
+                                 GLib.Variant("ai", []))
+
+    def _on_unmap(self, widget):
+        """
+            Save paned position
+            @param widget as Gtk.Widget
+        """
+        App().settings.set_value("paned-device-width",
+                                 GLib.Variant("i",
+                                              self.__paned.get_position()))
 
 #######################
 # PRIVATE             #
 #######################
+    def __update_list_device(self):
+        """
+            Setup list for device
+            @param list as SelectionList
+            @thread safe
+        """
+        def load():
+            artists = App().artists.get()
+            compilations = App().albums.get_compilation_ids([])
+            return (artists, compilations)
+
+        def setup(artists, compilations):
+            items = [(Type.ALL, _("Synced albums"), "")]
+            items.append((Type.PLAYLISTS, _("Playlists"), ""))
+            if compilations:
+                items.append((Type.COMPILATIONS, _("Compilations"), ""))
+                items.append((Type.SEPARATOR, "", ""))
+            items += artists
+            self.__selection_list.populate(items)
+        loader = Loader(target=load, view=self.__selection_list,
+                        on_finished=lambda r: setup(*r))
+        loader.start()
+
     def __sanitize_non_mtp(self):
         """
             Sanitize non MTP device by changing uri and creating a default
@@ -194,10 +263,19 @@ class DeviceView(View):
         self.__device.uri = uri
 
     def stop(self):
-        """
-            Stop syncing
-        """
         pass
+
+    def __on_sync_errors(self, mtp_sync, error):
+        """
+            Show information bar with error message
+            @param mtp_sync as MtpSync
+            @param error as str
+        """
+        error_text = error or _("Unknown error while syncing,"
+                                " try to reboot your device")
+        self.__error_label.set_text(error_text)
+        self.__infobar.show()
+        self.__infobar.set_revealed(True)
 
     def __on_sync_finished(self, device_widget):
         """
@@ -215,9 +293,16 @@ class DeviceView(View):
         """
         # Just update device widget if already populated
         if self.__memory_combo.get_active_text() is not None:
-            if not self.__device_widget.is_syncing():
-                self.__device_widget.populate()
+            if self.__device_widget.mtp_sync.cancellable.is_cancelled():
+                self.__device_widget.populate(self.__selected_ids)
             return
         for text in text_list:
             self.__memory_combo.append_text(text)
         self.__memory_combo.set_active(0)
+
+    def __on_item_selected(self, selectionlist):
+        """
+            Update view
+            @param selection_list as SelectionList
+        """
+        self.populate(selectionlist.selected_ids)

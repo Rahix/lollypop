@@ -10,18 +10,94 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-from gi.repository import Gtk, Gdk, GLib, Gio, GdkPixbuf
+from gi.repository import Gtk, GObject, Gdk, GLib, Gio, GdkPixbuf
 
 from gettext import gettext as _
+from urllib.parse import urlparse
+from lollypop.widgets_utils import Popover
+
+from lollypop.logger import Logger
+try:
+    import gi
+    gi.require_version('WebKit2', '4.0')
+    from gi.repository import WebKit2
+    WEBKIT2 = True
+except Exception as e:
+    WEBKIT2 = False
+    Logger.warning(e)
 
 from lollypop.information_store import InformationStore
 from lollypop.define import App, ArtSize, Type
 from lollypop.utils import get_network_available
-from lollypop.logger import Logger
 from lollypop.helper_task import TaskHelper
 
 
-class ArtworkSearch(Gtk.Bin):
+class ArtworkSearchWebView(Gtk.Bin):
+    """
+        Search for image through Google Image
+    """
+
+    __gsignals__ = {
+        "populated": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+    }
+
+    def __init__(self, spinner):
+        """
+            Init webview
+            @param spinner as Gtk.Spinner
+        """
+        Gtk.Bin.__init__(self)
+        self.__spinner = spinner
+        self.__webview = WebKit2.WebView()
+        self.__webview.show()
+        self.add(self.__webview)
+        self.__webview.connect("load-changed", self.__on_load_changed)
+        self.__webview.connect("resource-load-started",
+                               self.__on_resource_load_started)
+
+    def search(self, terms):
+        """
+            Search for terms
+            @param terms as str
+        """
+        uri = "https://www.google.fr/search?q=%s&tbm=isch" %\
+            GLib.uri_escape_string(terms, None, True)
+        self.__webview.load_uri(uri)
+
+    def do_get_preferred_size(self):
+        requisition = Gtk.Requisiton()
+        requisition.width = 300
+        requisition.height = 300
+        Gtk.Bin.do_get_preferred_size(requisition, requisition)
+
+#######################
+# PRIVATE             #
+#######################
+    def __on_load_changed(self, webview, event):
+        """
+            Stop spinner
+            @param webview as WebView
+            @param event as WebKit2.LoadEvent
+        """
+        if event == WebKit2.LoadEvent.FINISHED:
+            self.__spinner.stop()
+
+    def __on_resource_load_started(self, webview, resource, request):
+        """
+            Find opened google image
+            @param webview as WebView
+            @param resource as WebKit2.WebResource
+            @param request as WebKit2.URIRequest
+        """
+        uri = resource.get_uri()
+        parsed = urlparse(uri)
+        if parsed.scheme in ["http", "https"] and\
+                not parsed.netloc.find("google") != -1 and\
+                not parsed.netloc.find("gstatic") != -1:
+            self.emit("populated", uri)
+
+
+class ArtworkSearchWidget(Gtk.Bin):
     """
         Search for artwork
     """
@@ -37,6 +113,7 @@ class ArtworkSearch(Gtk.Bin):
         Gtk.Bin.__init__(self)
         self.connect("unmap", self.__on_self_unmap)
         self.__timeout_id = None
+        self.__web_search = None
         self.__album = album
         self.__artist_id = artist_id
         self.__cancellable = Gio.Cancellable()
@@ -51,50 +128,55 @@ class ArtworkSearch(Gtk.Bin):
         builder = Gtk.Builder()
         builder.add_from_resource("/org/gnome/Lollypop/ArtworkSearch.ui")
         builder.connect_signals(self)
-        self._infobar = builder.get_object("infobar")
-        self._infobar_label = builder.get_object("infobarlabel")
+        self.__infobar = builder.get_object("infobar")
+        self.__infobar_label = builder.get_object("infobarlabel")
         widget = builder.get_object("widget")
-        self._stack = builder.get_object("stack")
-        self._entry = builder.get_object("entry")
-        self._api_entry = builder.get_object("api_entry")
+        self.__stack = builder.get_object("stack")
+        self.__entry = builder.get_object("entry")
+        self.__api_entry = builder.get_object("api_entry")
+        self.__back_button = builder.get_object("back_button")
 
-        self._view = Gtk.FlowBox()
-        self._view.set_selection_mode(Gtk.SelectionMode.SINGLE)
-        self._view.connect("child-activated", self.__on_activate)
-        self._view.set_max_children_per_line(100)
-        self._view.set_property("row-spacing", 10)
-        self._view.show()
+        self.__view = Gtk.FlowBox()
+        self.__view.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.__view.connect("child-activated", self.__on_activate)
+        self.__view.set_max_children_per_line(100)
+        self.__view.set_property("row-spacing", 10)
+        self.__view.show()
 
         self._popover = builder.get_object("popover")
 
-        self._label = builder.get_object("label")
-        self._label.set_text(_("Select artwork"))
+        self.__label = builder.get_object("label")
+        self.__label.set_text(_("Select artwork"))
 
-        builder.get_object("viewport").add(self._view)
+        builder.get_object("viewport").add(self.__view)
 
-        self._spinner = builder.get_object("spinner")
-        self._stack.add_named(builder.get_object("scrolled"), "main")
-        self._stack.set_visible_child_name("main")
+        self.__spinner = builder.get_object("spinner")
+        self.__stack.add_named(builder.get_object("scrolled"), "main")
+        self.__stack.set_visible_child_name("main")
         self.add(widget)
         key = App().settings.get_value("cs-api-key").get_string() or\
             App().settings.get_default_value("cs-api-key").get_string()
-        self._api_entry.set_text(key)
+        self.__api_entry.set_text(key)
         self.set_size_request(700, 400)
 
     def populate(self):
         """
             Populate view
         """
-        image = Gtk.Image()
-        surface = App().art.get_default_icon("edit-clear-all-symbolic",
-                                             ArtSize.BIG,
-                                             self.get_scale_factor())
-        image.set_from_surface(surface)
+        image = Gtk.Image.new_from_icon_name("edit-clear-all-symbolic",
+                                             Gtk.IconSize.DIALOG)
         image.set_property("valign", Gtk.Align.CENTER)
         image.set_property("halign", Gtk.Align.CENTER)
-        image.get_style_context().add_class("cover-frame")
+        context = image.get_style_context()
+        context.add_class("cover-frame")
+        padding = context.get_padding(Gtk.StateFlags.NORMAL)
+        border = context.get_border(Gtk.StateFlags.NORMAL)
+        image.set_size_request(ArtSize.BIG + padding.left +
+                               padding.right + border.left + border.right,
+                               ArtSize.BIG + padding.top +
+                               padding.bottom + border.top + border.bottom)
         image.show()
-        self._view.add(image)
+        self.__view.add(image)
 
         # First load local files
         if self.__album is not None:
@@ -153,9 +235,7 @@ class ArtworkSearch(Gtk.Bin):
                 if self.__album is not None:
                     App().art.save_album_artwork(data, self.__album.id)
                 else:
-                    InformationStore.uncache_artwork(
-                        self.__artist,
-                        button.get_scale_factor())
+                    InformationStore.uncache_artwork(self.__artist)
                     InformationStore.add_artist_artwork(self.__artist, data)
                     App().art.emit("artist-artwork-changed", self.__artist)
                 self._streams = {}
@@ -168,15 +248,13 @@ class ArtworkSearch(Gtk.Bin):
             Reset cover
             @param button as Gtk.Button
         """
-        self._infobar.hide()
+        self.__infobar.hide()
         if self.__album is not None:
             App().art.remove_album_artwork(self.__album)
             App().art.clean_album_cache(self.__album)
             App().art.emit("album-artwork-changed", self.__album.id)
         else:
-            InformationStore.uncache_artwork(
-                        self.__artist,
-                        button.get_scale_factor())
+            InformationStore.uncache_artwork(self.__artist)
             InformationStore.add_artist_artwork(self.__artist, None)
             App().art.emit("artist-artwork-changed", self.__artist)
         self.__close_popover()
@@ -188,16 +266,16 @@ class ArtworkSearch(Gtk.Bin):
             @param reponse id as int
         """
         if response_id == Gtk.ResponseType.CLOSE:
-            self._infobar.hide()
-            self._view.unselect_all()
+            self.__infobar.hide()
+            self.__view.unselect_all()
 
     def _on_settings_button_clicked(self, button):
         """
             Show popover
             @param button as Gtk.Button
         """
-        self._popover.show()
-        self._api_entry.set_text(
+        self._popover.popup()
+        self.__api_entry.set_text(
             App().settings.get_value("cs-api-key").get_string())
 
     def _on_api_entry_changed(self, entry):
@@ -208,6 +286,17 @@ class ArtworkSearch(Gtk.Bin):
         value = entry.get_text().strip()
         App().settings.set_value("cs-api-key", GLib.Variant("s", value))
 
+    def _on_back_button_clicked(self, button):
+        """
+            Show web view
+            @param button as Gtk.Button
+        """
+        if self.__stack.get_visible_child_name() == "web":
+            self.__stack.set_visible_child_name("main")
+        else:
+            self.__stack.set_visible_child_name("web")
+        self.__back_button.set_sensitive(False)
+
 #######################
 # PRIVATE             #
 #######################
@@ -216,8 +305,8 @@ class ArtworkSearch(Gtk.Bin):
             Return current searches
             @return str
         """
-        if self._entry.get_text() != "":
-            search = self._entry.get_text()
+        if self.__entry.get_text() != "":
+            search = self.__entry.get_text()
         elif self.__album is not None:
             search = "%s+%s" % (self.__artist, self.__album.name)
         elif self.__artist_id is not None:
@@ -233,13 +322,17 @@ class ArtworkSearch(Gtk.Bin):
             return
         helper = TaskHelper()
         # Fallback to link extraction
-        if uris is None:
-            self._label.set_text(_("Low quality, missing API key…"))
-            uri = "https://www.google.fr/search?q=%s&tbm=isch" %\
-                GLib.uri_escape_string(self.__get_current_search(), None, True)
-            helper.load_uri_content(uri,
-                                    self.__cancellable,
-                                    self.__extract_links)
+        if uris is None and WEBKIT2:
+            if self.__web_search is None:
+                self.__back_button.show()
+                self.__web_search = ArtworkSearchWebView(self.__spinner)
+                self.__web_search.connect("populated",
+                                          self.__on_web_search_populated)
+                self.__web_search.show()
+                self.__entry.hide()
+                self.__stack.add_named(self.__web_search, "web")
+                self.__stack.set_visible_child_name("web")
+                self.__web_search.search(self.__get_current_search())
         # Populate the view
         elif uris:
             uri = uris.pop(0)
@@ -250,7 +343,7 @@ class ArtworkSearch(Gtk.Bin):
                                     uris)
         # Nothing to load, stop
         else:
-            self._spinner.stop()
+            self.__spinner.stop()
 
     def __add_pixbuf(self, uri, loaded, content, callback, *args):
         """
@@ -264,13 +357,13 @@ class ArtworkSearch(Gtk.Bin):
             return
         try:
             if loaded:
+                scale_factor = self.get_scale_factor()
                 bytes = GLib.Bytes(content)
                 stream = Gio.MemoryInputStream.new_from_bytes(bytes)
-                bytes.unref()
                 if stream is not None:
                     big = GdkPixbuf.Pixbuf.new_from_stream_at_scale(
-                        stream, ArtSize.BIG,
-                        ArtSize.BIG,
+                        stream, ArtSize.BIG * scale_factor,
+                        ArtSize.BIG * scale_factor,
                         True,
                         None)
                     stream.close()
@@ -279,38 +372,16 @@ class ArtworkSearch(Gtk.Bin):
                 image.set_property("halign", Gtk.Align.CENTER)
                 image.set_property("valign", Gtk.Align.CENTER)
                 self.__contents[image] = content
-                surface = Gdk.cairo_surface_create_from_pixbuf(big,
-                                                               0,
-                                                               None)
+                surface = Gdk.cairo_surface_create_from_pixbuf(
+                                                       big,
+                                                       scale_factor,
+                                                       None)
                 image.set_from_surface(surface)
                 image.show()
-                self._view.add(image)
+                self.__view.add(image)
         except Exception as e:
             Logger.error("ArtworkSearch::__add_pixbuf: %s" % e)
         callback(*args)
-
-    def __extract_links(self, uri, loaded, content):
-        """
-            Extract links from content
-            @param uri as str
-            @param loaded as bool
-            @param content as bytes
-            @param callback as function
-        """
-        uris = []
-        try:
-            from bs4 import BeautifulSoup
-            if loaded:
-                html = content.decode("latin-1")
-                soup = BeautifulSoup(html, "html.parser")
-                for link in soup.findAll("img"):
-                    try:
-                        uris.append(link.attrs["src"])
-                    except:
-                        pass
-        except Exception as e:
-            Logger.error("ArtworkSearch::__extract_links: %s" % e)
-        self.__populate(uris)
 
     def __close_popover(self):
         """
@@ -318,7 +389,7 @@ class ArtworkSearch(Gtk.Bin):
         """
         widget = self.get_parent()
         while widget is not None:
-            if isinstance(widget, Gtk.Popover):
+            if isinstance(widget, Popover):
                 widget.hide()
                 break
             widget = widget.get_parent()
@@ -328,7 +399,28 @@ class ArtworkSearch(Gtk.Bin):
             Cancel loading
             @param widget as Gtk.Widget
         """
+        if self.__web_search is not None:
+            self.__web_search.destroy()
         self.__cancellable.cancel()
+
+    def __on_web_search_populated(self, web_search, uri):
+        """
+            Load available uri
+            @param web_search as ArtworkSearchWebView
+            @param uri as str
+        """
+        if self.__stack.get_visible_child() == web_search:
+            for child in self.__view.get_children():
+                child.destroy()
+            self.__stack.set_visible_child_name("main")
+            self.__spinner.start()
+            self.__back_button.set_sensitive(True)
+        helper = TaskHelper()
+        helper.load_uri_content(uri,
+                                self.__cancellable,
+                                self.__add_pixbuf,
+                                self.__populate,
+                                [])
 
     def __on_google_content_loaded(self, uri, loaded, content):
         """
@@ -352,17 +444,15 @@ class ArtworkSearch(Gtk.Bin):
             if self.__album is not None:
                 App().art.save_album_artwork(data, self.__album.id)
             else:
-                InformationStore.uncache_artwork(
-                        self.__artist,
-                        flowbox.get_scale_factor())
+                InformationStore.uncache_artwork(self.__artist)
                 InformationStore.add_artist_artwork(self.__artist, data)
                 App().art.emit("artist-artwork-changed", self.__artist)
             self._streams = {}
         except:
-            self._infobar_label.set_text(_("Reset artwork?"))
-            self._infobar.show()
+            self.__infobar_label.set_text(_("Reset artwork?"))
+            self.__infobar.show()
             # GTK 3.20 https://bugzilla.gnome.org/show_bug.cgi?id=710888
-            self._infobar.queue_resize()
+            self.__infobar.queue_resize()
 
     def __on_search_timeout(self, string):
         """
@@ -370,12 +460,10 @@ class ArtworkSearch(Gtk.Bin):
             @param string as str
         """
         self.__cancellable.cancel()
-        for child in self._view.get_children():
+        for child in self.__view.get_children():
             child.destroy()
-        self._spinner.start()
-        self._spinner.show()
+        self.__spinner.start()
         self.__timeout_id = None
-        self.__loading = True
         self.__cancellable.reset()
         if get_network_available():
             uri = App().art.get_google_search_uri(string)

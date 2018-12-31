@@ -2,6 +2,11 @@
 <!-- Generated with glade 3.22.1 -->
 <interface>
   <requires lib="gtk+" version="3.14"/>
+  <object class="GtkImage" id="image1">
+    <property name="visible">True</property>
+    <property name="can_focus">False</property>
+    <property name="icon_name">media-playback-start-symbolic</property>
+  </object>
   <object class="GtkImage" id="image2">
     <property name="visible">True</property>
     <property name="can_focus">False</property>
@@ -33,20 +38,25 @@
       </packing>
     </child>
     <child>
-      <object class="GtkStack" id="stack">
+      <object class="GtkStack" id="header_stack">
         <property name="visible">True</property>
         <property name="can_focus">False</property>
         <child>
-          <object class="GtkButton" id="new_btn">
+          <object class="GtkButton" id="new_button">
             <property name="visible">True</property>
             <property name="sensitive">False</property>
             <property name="can_focus">True</property>
             <property name="receives_default">True</property>
             <property name="tooltip_text" translatable="yes">Create a new playlist</property>
+            <property name="valign">center</property>
             <property name="margin_end">2</property>
             <property name="image">image2</property>
             <property name="relief">none</property>
-            <signal name="clicked" handler="_on_new_btn_clicked" swapped="no"/>
+            <signal name="clicked" handler="_on_new_button_clicked" swapped="no"/>
+            <style>
+              <class name="light-button"/>
+              <class name="light-button-no-right-border"/>
+            </style>
           </object>
           <packing>
             <property name="name">page0</property>
@@ -64,6 +74,52 @@
             <property name="position">1</property>
           </packing>
         </child>
+      </object>
+      <packing>
+        <property name="left_attach">2</property>
+        <property name="top_attach">0</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkStack" id="stack">
+        <property name="visible">True</property>
+        <property name="can_focus">False</property>
+        <property name="transition_type">crossfade</property>
+        <child>
+          <object class="GtkLabel" id="placeholder">
+            <property name="visible">True</property>
+            <property name="can_focus">False</property>
+            <property name="halign">center</property>
+            <property name="wrap">True</property>
+            <style>
+              <class name="dim-label"/>
+            </style>
+          </object>
+          <packing>
+            <property name="name">placeholder</property>
+          </packing>
+        </child>
+      </object>
+      <packing>
+        <property name="left_attach">0</property>
+        <property name="top_attach">1</property>
+        <property name="width">3</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkButton" id="play_button">
+        <property name="visible">True</property>
+        <property name="sensitive">False</property>
+        <property name="can_focus">True</property>
+        <property name="receives_default">True</property>
+        <property name="tooltip_text" translatable="yes">Play</property>
+        <property name="valign">center</property>
+        <property name="image">image1</property>
+        <property name="relief">none</property>
+        <signal name="clicked" handler="_on_play_button_clicked" swapped="no"/>
+        <style>
+          <class name="light-button"/>
+        </style>
       </object>
       <packing>
         <property name="left_attach">1</property>

@@ -26,6 +26,7 @@ class NotificationManager:
         """
             Init notification object with lollypop infos
         """
+        self.__notification_timeout_id = None
         self.__notification_handler_id = None
         self.__disable_all_notifications = True
         self.__is_gnome = is_gnome()
@@ -51,6 +52,22 @@ class NotificationManager:
             self.__on_notifications_settings_changed,
         )
 
+    def lock(self, seconds):
+        """
+            Lock notifications
+            @param seconds as int
+        """
+        def enable_notifications():
+            self.__notification_timeout_id = None
+            self.__disable_all_notifications = App().settings.get_value(
+                "disable-notifications",
+            )
+        self.__disable_all_notifications = True
+        if self.__notification_timeout_id is not None:
+            GLib.source_remove(self.__notification_timeout_id)
+        self.__notification_timeout_id = GLib.timeout_add(
+            2000, enable_notifications)
+
     def send(self, title, body=""):
         """
             Send message to user
@@ -68,23 +85,34 @@ class NotificationManager:
 #######################
 # PRIVATE             #
 #######################
+    def __withdraw_notification(self):
+        """
+            Remove notification
+        """
+        self.__notification_timeout_id = None
+        App().withdraw_notification("current-changed")
+
     def __on_current_changed(self, player):
         """
             Send notification with track_id infos
             @param player Player
         """
+        if self.__disable_all_notifications:
+            return
         state = App().window.get_window().get_state()
         if player.current_track.id is None or\
                 state & Gdk.WindowState.FOCUSED or\
                 App().is_fullscreen():
             return
 
-        if player.current_track.id == Type.RADIOS:
+        if self.__is_gnome:
+            cover_path = None
+        elif player.current_track.id == Type.RADIOS:
             cover_path = App().art.get_radio_cache_path(
                 player.current_track.album_artists[0], ArtSize.BIG)
         else:
             cover_path = App().art.get_album_cache_path(
-                player.current_track.album, ArtSize.BIG)
+                player.current_track.album, ArtSize.BIG, ArtSize.BIG)
         if cover_path is None:
             icon = Gio.Icon.new_for_string("org.gnome.Lollypop-symbolic")
         else:
@@ -105,6 +133,10 @@ class NotificationManager:
                 (", ".join(player.current_track.artists),
                  player.current_track.album.name))
         App().send_notification("current-changed", self.__action)
+        if self.__notification_timeout_id is not None:
+            GLib.source_remove(self.__notification_timeout_id)
+        self.__notification_timeout_id = GLib.timeout_add(
+            2000, self.__withdraw_notification)
 
     def __on_notifications_settings_changed(self, *ignore):
         self.__disable_all_notifications = App().settings.get_value(

@@ -15,7 +15,7 @@ from gi.repository import Gtk, Gio, GLib
 from gettext import gettext as _
 
 from lollypop.pop_next import NextPopover
-from lollypop.define import App, Shuffle, NextContext
+from lollypop.define import App, Shuffle, NextContext, Type
 
 
 class ToolbarEnd(Gtk.Bin):
@@ -29,7 +29,7 @@ class ToolbarEnd(Gtk.Bin):
         """
         Gtk.Bin.__init__(self)
         self.set_hexpand(True)
-        self.__search = None
+        self.__search_popover = None
         self.__timeout_id = None
         builder = Gtk.Builder()
         builder.add_from_resource("/org/gnome/Lollypop/ToolbarEnd.ui")
@@ -74,56 +74,38 @@ class ToolbarEnd(Gtk.Bin):
         party_action.connect("change-state", self.__on_party_mode_change_state)
         App().add_action(party_action)
         App().set_accels_for_action("app.party", ["<Control>p"])
+
+        scrobbling_disabled = App().settings.get_value("disable-scrobbling")
+        scrobbling_action = Gio.SimpleAction.new_stateful(
+            "scrobbling",
+            None,
+            GLib.Variant.new_boolean(not scrobbling_disabled))
+        scrobbling_action.connect("change-state",
+                                  self.__on_scrobbling_mode_change_state)
+        App().add_action(scrobbling_action)
+        App().set_accels_for_action("app.scrobbling", ["<Control><Shift>s"])
+
         self.__next_popover = NextPopover()
         self.__next_popover.set_relative_to(self.__shuffle_button)
 
-        self.__search_button = builder.get_object("search-button")
-        self.__gesture = Gtk.GestureLongPress.new(self.__search_button)
-        self.__gesture.connect("pressed", self.__on_search_button_pressed)
-        self.__gesture.connect("cancelled", self.__on_search_button_cancelled)
         search_action = Gio.SimpleAction.new("search", None)
-        search_action.connect(
-            "activate",
-            lambda x, y: self.__on_search_button_cancelled(self.__gesture))
+        self.__search_button = builder.get_object("search-button")
+        search_action.connect("activate", self.__on_search_activate)
         App().add_action(search_action)
         App().set_accels_for_action("app.search", ["<Control>f"])
 
-        self.__settings_button = builder.get_object("settings-button")
+        builder_menu = Gtk.Builder()
+        builder_menu.add_from_resource("/org/gnome/Lollypop/Appmenu.ui")
+        builder.get_object("settings-button").set_menu_model(
+            builder_menu.get_object("app-menu"))
 
         self.__list_button = builder.get_object("list-button")
         self.__list_button.set_property("has-tooltip", True)
         self.__list_button.connect("query-tooltip",
                                    self.__on_list_button_query_tooltip)
         self.__list_popover = None
-        App().player.connect("lock-changed", self.__on_lock_changed)
-
-    def do_show(self):
+        App().player.connect("playlist-changed", self.__on_playlist_changed)
         self.__set_shuffle_icon()
-        Gtk.Bin.do_show(self)
-
-    def do_hide(self):
-        self.__next_popover.hide()
-        Gtk.Bin.do_hide(self)
-
-    def set_minimal(self, b):
-        """
-            Set minimal, hide some widget for minimal player
-            @param b as bool
-        """
-        if b:
-            self.__list_button.hide()
-            self.__next_popover.hide()
-        else:
-            self.__list_button.show()
-            if self.__next_popover.should_be_shown():
-                self.__next_popover.show()
-
-    def setup_menu(self, menu):
-        """
-            Add an application menu to menu button
-            @parma: menu as Gio.Menu
-        """
-        self.__settings_button.set_menu_model(menu)
 
     def on_next_changed(self, player):
         """
@@ -134,50 +116,82 @@ class ToolbarEnd(Gtk.Bin):
             if self.__next_popover.is_visible():
                 self.__next_popover.update()
             else:
-                self.__next_popover.show()
+                self.__next_popover.popup()
         else:
             self.__next_popover.hide()
+
+    def set_mini(self, mini):
+        """
+            Set mini mode
+            @param mini as bool
+        """
+        if mini:
+            self.__search_button.hide()
+            self.__list_button.hide()
+        else:
+            self.__search_button.show()
+            self.__list_button.show()
 
     def search(self, search):
         """
             Search item
             @param search as str
         """
-        self.__on_search_short([])
-        self.__search.set_text(search)
+        self.__on_search_button_cancelled()
+        self.__search_popover.set_text(search)
 
-    def show_list_popover(self, button):
+    @property
+    def next_popover(self):
         """
-            Show a popover with current playlist
-            @param button as Gtk.Button
+            Get next popover
+            @return popover
         """
+        return self.__next_popover
+
+#######################
+# PROTECTED           #
+#######################
+    def _on_list_button_toggled(self, button):
+        """
+            Show current playback context popover
+            @param button as Gtk.MenuButton
+        """
+        if not button.get_active():
+            return
+        self.__next_popover.hide()
+        self.__next_popover.inhibit(True)
         if App().player.queue:
             from lollypop.pop_queue import QueuePopover
             popover = QueuePopover()
-        elif App().player.get_playlist_ids():
+        elif App().player.playlist_ids:
             from lollypop.pop_playlists import PlaylistsPopover
             popover = PlaylistsPopover()
         else:
             from lollypop.pop_albums import AlbumsPopover
             popover = AlbumsPopover()
         popover.set_relative_to(button)
-        popover.show()
-        return popover
+        popover.popup()
+        popover.connect("closed", self.__on_popover_closed, button)
+        return True
 
-#######################
-# PROTECTED           #
-#######################
-    def _on_list_button_clicked(self, widget, unused=None):
+    def _on_search_button_toggled(self, button):
         """
-            Show current playback context popover
-            @param widget as Gtk.Widget
+            Show search popover
+            @param button as Gtk.Button
         """
-        if self.__list_popover is not None:
+        if not button.get_active():
+            self.__search_popover.popdown()
             return
         self.__next_popover.hide()
         self.__next_popover.inhibit(True)
-        self.__list_popover = self.show_list_popover(widget)
-        self.__list_popover.connect("closed", self.__on_list_popover_closed)
+        if self.__search_popover is None:
+            from lollypop.pop_search import SearchPopover
+            self.__search_popover = SearchPopover()
+            self.__search_popover.connect("closed",
+                                          self.__on_popover_closed,
+                                          button)
+        self.__search_popover.set_relative_to(button)
+        self.__search_popover.popup()
         return True
 
     def _on_shuffle_button_toggled(self, button):
@@ -194,7 +208,7 @@ class ToolbarEnd(Gtk.Bin):
         else:
             self.__next_popover.inhibit(False)
             if self.__next_popover.should_be_shown():
-                self.__next_popover.show()
+                self.__next_popover.popup()
 
     def _on_settings_button_toggled(self, button):
         """
@@ -207,7 +221,7 @@ class ToolbarEnd(Gtk.Bin):
         else:
             self.__next_popover.inhibit(False)
             if self.__next_popover.should_be_shown():
-                self.__next_popover.show()
+                self.__next_popover.popup()
 
 #######################
 # PRIVATE             #
@@ -218,7 +232,7 @@ class ToolbarEnd(Gtk.Bin):
         """
         def on_change_state(action, value, genre_id):
             action.set_state(value)
-            ids = App().player.get_party_ids()
+            ids = list(App().settings.get_value("party-ids"))
             genre_ids = App().genres.get_ids()
             # Select all
             if genre_id is None:
@@ -227,10 +241,7 @@ class ToolbarEnd(Gtk.Bin):
                     action = App().lookup_action("genre_%s" % genre_id)
                     if action.get_state() != value:
                         action.set_state(value)
-                if value:
-                    ids = []
-                else:
-                    ids = App().genres.get_ids()
+                ids = []
             # Party id added
             elif value:
                 ids.append(genre_id)
@@ -260,7 +271,7 @@ class ToolbarEnd(Gtk.Bin):
         # Hack, hack, hack
         submenu_name = _("Next")
         menu = self.__party_submenu
-        for (genre_id, name) in App().genres.get():
+        for (genre_id, name, sortname) in App().genres.get():
             in_party_ids = not party_ids or genre_id in party_ids
             action_name = "genre_%s" % genre_id
             action = Gio.SimpleAction.new_stateful(
@@ -280,30 +291,6 @@ class ToolbarEnd(Gtk.Bin):
                 menu = submenu
                 i = 0
             i += 1
-
-    def __on_search_button_pressed(self, gesture, x, y):
-        """
-            Show filtering
-            @param gesture as Gtk.GestureLongPress
-            @param x as float
-            @param y as float
-        """
-        if App().window.container.view is not None:
-            App().window.container.view.enable_filter()
-
-    def __on_search_button_cancelled(self, gesture):
-        """
-            Show search popover
-            @param gesture as Gtk.GestureLongPress
-        """
-        self.__next_popover.hide()
-        self.__next_popover.inhibit(True)
-        if self.__search is None:
-            from lollypop.pop_search import SearchPopover
-            self.__search = SearchPopover()
-            self.__search.connect("closed", self.__on_popover_closed)
-        self.__search.set_relative_to(self.__search_button)
-        self.__search.show()
 
     def __set_shuffle_icon(self):
         """
@@ -346,11 +333,21 @@ class ToolbarEnd(Gtk.Bin):
                 not App().settings.get_value("dark-ui"):
             settings = Gtk.Settings.get_default()
             settings.set_property("gtk-application-prefer-dark-theme", value)
-        App().player.set_party(value)
+        App().player.set_party(value.get_boolean())
         action.set_state(value)
         self.__shuffle_action.set_enabled(not value)
         self.__playback_action.set_enabled(not value)
         self.on_next_changed(App().player)
+
+    def __on_scrobbling_mode_change_state(self, action, value):
+        """
+            Change scrobbling option
+            @param action as Gio.SimpleAction
+            @param value as bool
+        """
+        action.set_state(value)
+        App().settings.set_value("disable-scrobbling",
+                                 GLib.Variant("b", not value))
 
     def __on_shuffle_change_state(self, action, value):
         """
@@ -379,15 +376,6 @@ class ToolbarEnd(Gtk.Bin):
         self.__shuffle_button.set_active(
             not self.__shuffle_button.get_active())
 
-    def __on_lock_changed(self, player):
-        """
-            Lock toolbar
-            @param player as Player
-        """
-        self.__party_button.set_sensitive(not player.locked)
-        self.__list_button.set_sensitive(not player.locked)
-        self.__shuffle_button.set_sensitive(not player.locked)
-
     def __on_playback_changed(self, settings, value):
         """
             Update shuffle icon
@@ -396,22 +384,27 @@ class ToolbarEnd(Gtk.Bin):
         self.__set_shuffle_icon()
         self.__next_popover.hide()
 
-    def __on_list_popover_closed(self, popover):
-        """
-            Reset variable
-            @param popover as Gtk.Popover
-        """
-        self.__list_popover = None
-        self.__on_popover_closed(popover)
-
-    def __on_popover_closed(self, popover):
+    def __on_popover_closed(self, popover, button):
         """
             Restore next popover if needed
-            @param popover as Gtk.Popover
+            @param popover as Popover
+            @param button as Gtk.Button
         """
+        button.set_active(False)
         self.__next_popover.inhibit(False)
         if self.__next_popover.should_be_shown():
-            self.__next_popover.show()
+            self.__next_popover.popup()
+
+    def __on_search_activate(self, action, variant):
+        """
+            @param action as Gio.SimpleAction
+            @param variant as GLib.Variant
+        """
+        if self.__search_button.get_visible():
+            self.__search_button.set_active(
+                not self.__search_button.get_active())
+        else:
+            App().window.container.show_view(Type.SEARCH)
 
     def __on_list_button_query_tooltip(self, widget, x, y, keyboard, tooltip):
         """
@@ -424,7 +417,17 @@ class ToolbarEnd(Gtk.Bin):
         """
         if App().player.queue:
             widget.set_tooltip_text(_("Queue"))
-        elif App().player.get_playlist_ids():
+        elif App().player.playlist_ids:
             widget.set_tooltip_text(_("Playing playlists"))
         else:
             widget.set_tooltip_text(_("Playing albums"))
+
+    def __on_playlist_changed(self, player):
+        """
+            Update playback button status
+            @param player as Player
+        """
+        if player.albums or player.playlist_ids or player.queue:
+            self.__list_button.set_sensitive(True)
+        else:
+            self.__list_button.set_sensitive(False)

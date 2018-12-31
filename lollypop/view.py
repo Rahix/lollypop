@@ -12,10 +12,31 @@
 
 from gi.repository import Gtk, GLib
 
-from lollypop.define import App
+from time import time
+
+from lollypop.logger import Logger
+from lollypop.adaptive import AdaptiveView
 
 
-class View(Gtk.Grid):
+class BaseView(AdaptiveView):
+    """
+        Common views members
+    """
+
+    def __init__(self):
+        AdaptiveView.__init__(self)
+
+    def populate(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def disable_overlay(self):
+        pass
+
+
+class View(BaseView, Gtk.Grid):
     """
         Generic view
     """
@@ -25,21 +46,11 @@ class View(Gtk.Grid):
             Init view
             @param filtered as bool
         """
+        BaseView.__init__(self)
         Gtk.Grid.__init__(self)
-        self.connect("destroy", self._on_destroy)
         self.__overlayed = None
         self.set_property("orientation", Gtk.Orientation.VERTICAL)
         self.set_border_width(0)
-        player = App().player
-        self.__current_signal = player.connect("current-changed",
-                                               self._on_current_changed)
-        self.__duration_signal = player.connect("duration-changed",
-                                                self._on_duration_changed)
-        self.__cover_signal = App().art.connect("album-artwork-changed",
-                                                self.__on_cover_changed)
-
-        # Stop populate thread
-        self._stop = False
         self.__new_ids = []
 
         if filtered:
@@ -51,7 +62,7 @@ class View(Gtk.Grid):
                                         self._on_search_changed)
             self.__search_entry.connect("key-press-event",
                                         self.__on_key_press)
-            self.__search_entry.set_size_request(400, -1)
+            self.__search_entry.set_size_request(300, -1)
             self.__search_entry.show()
             button = Gtk.Button.new_from_icon_name("window-close-symbolic",
                                                    Gtk.IconSize.MENU)
@@ -71,29 +82,11 @@ class View(Gtk.Grid):
         self._scrolled.connect("leave-notify-event", self.__on_leave_notify)
         self._scrolled.show()
         self._viewport = Gtk.Viewport()
+        self._viewport.connect("destroy", self.__on_destroy)
         self._scrolled.add(self._viewport)
         self._viewport.show()
-
-    def stop(self):
-        """
-            Stop populating
-        """
-        self._stop = True
-        for child in self.children:
-            child.stop()
-
-    def disable_overlay(self):
-        """
-            Disable overlay widget
-        """
-        if self.__overlayed is not None:
-            self.__overlayed.show_overlay(False)
-
-    def update_children(self):
-        """
-            Update children
-        """
-        GLib.idle_add(self.__update_widgets, self.children)
+        self.connect("map", self._on_map)
+        self.connect("unmap", self._on_unmap)
 
     def enable_filter(self):
         """
@@ -106,8 +99,25 @@ class View(Gtk.Grid):
             if enable:
                 self.__search_entry.grab_focus()
 
-    def populate(self):
-        pass
+    def disable_overlay(self):
+        """
+            Disable overlay widget
+        """
+        if self.__overlayed is not None:
+            self.__overlayed.show_overlay(False)
+
+    def on_overlayed(self, widget, value):
+        """
+            Disable overlay on previous overlayed widget
+            @param widget as AlbumWidget
+            @param value as bool
+        """
+        if value:
+            if self.__overlayed is not None:
+                self.__overlayed.show_overlay(False)
+            self.__overlayed = widget
+        elif self.__overlayed == widget:
+            self.__overlayed = None
 
     @property
     def filtered(self):
@@ -116,13 +126,6 @@ class View(Gtk.Grid):
             @return bool
         """
         return self._filter is not None and self._filter != ""
-
-    @property
-    def children(self):
-        """
-            Return view children
-        """
-        return []
 
 #######################
 # PROTECTED           #
@@ -141,34 +144,6 @@ class View(Gtk.Grid):
         child.set_filtered(True)
         return False
 
-    def _on_overlayed(self, widget, value):
-        """
-            Keep overlayed widget, clean previously overlayed
-            @param widget as AlbumWidget
-            @param value as bool
-        """
-        if value:
-            if self.__overlayed is not None:
-                self.__overlayed.show_overlay(False)
-            self.__overlayed = widget
-        elif self.__overlayed == widget:
-            self.__overlayed = None
-
-    def _on_current_changed(self, player):
-        """
-            Current song changed
-            @param player as Player
-        """
-        GLib.idle_add(self.__update_widgets, self.children)
-
-    def _on_duration_changed(self, player, track_id):
-        """
-            Update duration for current track
-            @param player as Player
-            @param track id as int
-        """
-        GLib.idle_add(self.__update_duration, self.children, track_id)
-
     def _on_search_changed(self, entry):
         """
             Update filter
@@ -177,19 +152,11 @@ class View(Gtk.Grid):
         self._filter = self.__search_entry.get_text()
         self._box.invalidate_filter()
 
-    def _on_destroy(self, widget):
-        """
-            Remove signals on unamp
-            @param widget as Gtk.Widget
-        """
-        if self.__duration_signal is not None:
-            App().player.disconnect(self.__duration_signal)
-        if self.__current_signal is not None:
-            App().player.disconnect(self.__current_signal)
-            self.__current_signal = None
-        if self.__cover_signal is not None:
-            App().art.disconnect(self.__cover_signal)
-            self.__cover_signal = None
+    def _on_map(self, widget):
+        pass
+
+    def _on_unmap(self, widget):
+        pass
 
 #######################
 # PRIVATE             #
@@ -197,23 +164,13 @@ class View(Gtk.Grid):
     def __update_widgets(self, widgets):
         """
             Update all widgets
-            @param widgets as AlbumWidget/PlaylistWidget
+            @param widgets as BaseWidget
         """
         if widgets:
             widget = widgets.pop(0)
             widget.update_state()
             widget.update_playing_indicator()
             GLib.idle_add(self.__update_widgets, widgets)
-
-    def __update_duration(self, widgets, track_id):
-        """
-            Update duration on all widgets
-            @param widgets as AlbumWidget/PlaylistWidget
-        """
-        if widgets:
-            widget = widgets.pop(0)
-            widget.update_duration(track_id)
-            GLib.idle_add(self.__update_duration, widgets, track_id)
 
     def __on_button_clicked(self, widget):
         """
@@ -251,15 +208,12 @@ class View(Gtk.Grid):
            event.y >= allocation.height:
             self.disable_overlay()
 
-    def __on_cover_changed(self, art, album_id):
+    def __on_destroy(self, viewport):
         """
-            Update album cover in view
-            @param art as Art
-            @param album id as int
+            Mark widget as destroyed
+            @param viewport as Gtk.Viewport
         """
-        for widget in self.children:
-            if album_id == widget.album.id:
-                widget.update_cover()
+        self._viewport = None
 
 
 class LazyLoadingView(View):
@@ -274,25 +228,37 @@ class LazyLoadingView(View):
         """
         View.__init__(self, filtered)
         self._lazy_queue = []  # Widgets not initialized
-        self._scroll_value = 0
-        self.__prev_scroll_value = 0
+        self.__priority_queue = []
+        self.__scroll_timeout_id = None
         self._scrolled.get_vadjustment().connect("value-changed",
                                                  self._on_value_changed)
+        self.__start_time = time()
 
     def stop(self):
         """
             Stop loading
         """
-        self._lazy_queue = []
+        self._lazy_queue = None
         View.stop(self)
 
-    def lazy_loading(self, widgets=[], scroll_value=0):
+    def lazy_loading(self):
         """
             Load the view in a lazy way
-            @param widgets as [Gtk.Widget]
-            @param scroll_value as float
         """
-        GLib.idle_add(self.__lazy_loading, widgets, scroll_value)
+        widget = None
+        if self._lazy_queue is None:
+            return
+        if self.__priority_queue:
+            widget = self.__priority_queue.pop(0)
+            self._lazy_queue.remove(widget)
+        elif self._lazy_queue:
+            widget = self._lazy_queue.pop(0)
+        if widget is not None:
+            widget.connect("populated", self._on_populated)
+            widget.populate()
+        else:
+            Logger.debug("LazyLoadingView::lazy_loading(): %s",
+                         time() - self.__start_time)
 
 #######################
 # PROTECTED           #
@@ -304,35 +270,25 @@ class LazyLoadingView(View):
         """
         if not self._lazy_queue:
             return False
-        scroll_value = adj.get_value()
-        self.__prev_scroll_value = scroll_value
-        GLib.idle_add(self.__lazy_or_not, scroll_value)
+        if self.__scroll_timeout_id is not None:
+            GLib.source_remove(self.__scroll_timeout_id)
+        self.__scroll_timeout_id = GLib.timeout_add(200, self.__lazy_or_not)
+
+    def _on_populated(self, widget):
+        """
+            Add another album/disc
+            @param widget as AlbumWidget/TracksView
+        """
+        if self._lazy_queue is None:
+            return
+        if not widget.is_populated:
+            widget.populate()
+        else:
+            self.lazy_loading()
 
 #######################
 # PRIVATE             #
 #######################
-    def __lazy_loading(self, widgets=[], scroll_value=0):
-        """
-            Load the view in a lazy way
-            @param widgets as [Gtk.Widget]
-            @param scroll_value as float
-        """
-        widget = None
-        if self._stop or self._scroll_value != scroll_value:
-            return False
-        if widgets:
-            widget = widgets.pop(0)
-            if widget in self._lazy_queue:
-                self._lazy_queue.remove(widget)
-        elif self._lazy_queue:
-            widget = self._lazy_queue.pop(0)
-        if widget is not None:
-            widget.populate()
-            if widgets:
-                GLib.timeout_add(10, self.lazy_loading, widgets, scroll_value)
-            else:
-                GLib.idle_add(self.lazy_loading, widgets, scroll_value)
-
     def __is_visible(self, widget):
         """
             Is widget visible in scrolled
@@ -347,18 +303,32 @@ class LazyLoadingView(View):
         except:
             return True
 
-    def __lazy_or_not(self, scroll_value):
+    def __lazy_or_not(self):
         """
             Add visible widgets to lazy queue
-            @param scroll value as float
         """
-        self._scroll_value = scroll_value
-        widgets = []
-        for child in self._lazy_queue:
-            if self._stop or self._scroll_value != scroll_value:
-                return
-            if self.__is_visible(child):
-                widgets.append(child)
-        if self._stop or self._scroll_value != scroll_value:
+        self.__scroll_timeout_id = None
+        self.__priority_queue = []
+        if self._lazy_queue is None:
             return
-        GLib.idle_add(self.lazy_loading, widgets, self._scroll_value)
+        for child in self._lazy_queue:
+            if self.__is_visible(child):
+                self.__priority_queue.append(child)
+        GLib.idle_add(self.lazy_loading)
+
+
+class MessageView(View):
+    """
+        Show a message to user
+    """
+
+    def __init__(self, text):
+        """
+            Init view
+            @param text as str
+        """
+        View.__init__(self)
+        builder = Gtk.Builder()
+        builder.add_from_resource("/org/gnome/Lollypop/DeviceManagerView.ui")
+        self.add(builder.get_object("message"))
+        builder.get_object("label").set_text(text)

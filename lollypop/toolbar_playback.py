@@ -13,7 +13,7 @@
 from gi.repository import Gtk
 
 from lollypop.define import App
-from lollypop.controllers import PlaybackController
+from lollypop.controller_playback import PlaybackController
 
 
 class ToolbarPlayback(Gtk.Bin, PlaybackController):
@@ -21,9 +21,10 @@ class ToolbarPlayback(Gtk.Bin, PlaybackController):
         Playback toolbar
     """
 
-    def __init__(self):
+    def __init__(self, window):
         """
             Init toolbar
+            @parma window as Window
         """
         Gtk.Bin.__init__(self)
         PlaybackController.__init__(self)
@@ -33,14 +34,16 @@ class ToolbarPlayback(Gtk.Bin, PlaybackController):
 
         self.add(builder.get_object("playback"))
 
-        self._prev_btn = builder.get_object("previous_button")
-        self._play_btn = builder.get_object("play_button")
-        self._next_btn = builder.get_object("next_button")
-        self.__back_btn = builder.get_object("back_button")
+        self._prev_button = builder.get_object("previous_button")
+        self._play_button = builder.get_object("play_button")
+        self._next_button = builder.get_object("next_button")
+        self.__back_button = builder.get_object("back_button")
         self._play_image = builder.get_object("play_image")
         self._pause_image = builder.get_object("pause_image")
 
         App().player.connect("lock-changed", self.__on_lock_changed)
+        window.connect("can-go-back-changed", self.__on_can_go_back_changed)
+        window.connect("show-can-go-back", self.__on_show_can_go_back)
 
     def show_back(self, b, sensitive=False):
         """
@@ -48,28 +51,50 @@ class ToolbarPlayback(Gtk.Bin, PlaybackController):
             @param b as bool
         """
         if b:
-            self.__back_btn.show()
-            self.__back_btn.set_sensitive(sensitive)
+            self.__back_button.show()
+            self.__back_button.set_sensitive(sensitive)
         else:
-            self.__back_btn.hide()
+            self.__back_button.hide()
 
 #######################
-# PRIVATE             #
+# Protected           #
 #######################
     def _on_back_btn_clicked(self, button):
         """
             Go back in container stack
             @param button as Gtk.Button
         """
-        App().window.container.go_back()
+        App().window.go_back()
 
 #######################
-# PRIVATE             #
+# Private             #
 #######################
     def __on_lock_changed(self, player):
         """
             Lock toolbar
             @param player as Player
         """
-        self._prev_btn.set_sensitive(not player.locked)
-        self._next_btn.set_sensitive(not player.locked)
+        self._prev_button.set_sensitive(not player.is_locked)
+        self._next_button.set_sensitive(not player.is_locked)
+
+    def __on_show_can_go_back(self, window, back):
+        """
+            Show back button
+            @param window as Gtk.Window
+            @param back as bool
+        """
+        if back:
+            self.__back_button.show()
+        else:
+            self.__back_button.hide()
+
+    def __on_can_go_back_changed(self, window, back):
+        """
+            Make button sensitive
+            @param window as Gtk.Window
+            @param back as bool
+        """
+        if back:
+            self.__back_button.set_sensitive(True)
+        else:
+            self.__back_button.set_sensitive(False)

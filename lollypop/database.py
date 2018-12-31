@@ -14,14 +14,36 @@ from gi.repository import GLib, Gio
 
 import sqlite3
 from threading import Lock
+import itertools
 
 from lollypop.define import App
 from lollypop.objects import Album
-from lollypop.database_upgrade import DatabaseUpgrade
+from lollypop.database_upgrade import DatabaseAlbumsUpgrade
 from lollypop.sqlcursor import SqlCursor
 from lollypop.logger import Logger
 from lollypop.localized import LocalizedCollation
 from lollypop.utils import noaccents
+
+
+class MyLock:
+    """
+        Lock with count
+    """
+    def __init__(self):
+        self.__lock = Lock()
+        self.__count = 0
+
+    def acquire(self):
+        self.__count += 1
+        self.__lock.acquire()
+
+    def release(self):
+        self.__count -= 1
+        self.__lock.release()
+
+    @property
+    def count(self):
+        return self.__count
 
 
 class Database:
@@ -41,6 +63,7 @@ class Database:
                                               mb_album_id TEXT,
                                               no_album_artist BOOLEAN NOT NULL,
                                               year INT,
+                                              timestamp INT,
                                               uri TEXT NOT NULL,
                                               popularity INT NOT NULL,
                                               rate INT NOT NULL,
@@ -67,7 +90,9 @@ class Database:
                                               discname TEXT,
                                               album_id INT NOT NULL,
                                               year INT,
+                                              timestamp INT,
                                               popularity INT NOT NULL,
+                                              loved INT NOT NULL DEFAULT 0,
                                               rate INT NOT NULL,
                                               ltime INT NOT NULL,
                                               mtime INT NOT NULL,
@@ -92,16 +117,16 @@ class Database:
         """
             Create database tables or manage update if needed
         """
-        self.thread_lock = Lock()
+        self.thread_lock = MyLock()
         f = Gio.File.new_for_path(self.DB_PATH)
-        upgrade = DatabaseUpgrade()
+        upgrade = DatabaseAlbumsUpgrade()
         if not f.query_exists():
             try:
                 d = Gio.File.new_for_path(self.__LOCAL_PATH)
                 if not d.query_exists():
                     d.make_directory_with_parents()
                 # Create db schema
-                with SqlCursor(self) as sql:
+                with SqlCursor(self, True) as sql:
                     sql.execute(self.__create_albums)
                     sql.execute(self.__create_artists)
                     sql.execute(self.__create_genres)
@@ -119,6 +144,24 @@ class Database:
                 Logger.error("Database::__init__(): %s" % e)
         else:
             upgrade.upgrade(self)
+
+    def execute(self, request):
+        """
+            Execute SQL request (only smart one)
+            @param request as str
+            @return list
+        """
+        with SqlCursor(App().db) as sql:
+            result = sql.execute(request)
+            # Special case for OR request
+            if request.find("ORDER BY random()") == -1 and\
+                    request.find("UNION") != -1:
+                ids = []
+                for (id, other) in list(result):
+                    ids.append(id)
+                return ids
+            else:
+                return list(itertools.chain(*result))
 
     def get_cursor(self):
         """
@@ -157,7 +200,7 @@ class Database:
             album_artist_ids = App().albums.get_artist_ids(album_id)
             artist_ids = App().tracks.get_artist_ids(track_id)
             uri = App().tracks.get_uri(track_id)
-            App().playlists.remove(uri)
+            App().playlists.remove_uri_from_all(uri)
             App().tracks.remove(track_id)
             App().tracks.clean(track_id)
             all_album_ids.append(album_id)

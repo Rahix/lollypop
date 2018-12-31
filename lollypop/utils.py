@@ -10,98 +10,48 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-from gi.repository import Gio, GLib, Gdk
-
-import cairo
+from gi.repository import Gio, GLib, Gdk, GdkPixbuf
 
 from math import pi
 from gettext import gettext as _
 import unicodedata
+import cairo
 
-from lollypop.helper_task import TaskHelper
-from lollypop.define import App
+from lollypop.logger import Logger
+from lollypop.define import App, Type, SelectionListMask
 
 
-def blur(surface, image, w, h):
+def get_round_surface(image, scale_factor):
     """
-        Blur surface using PIL
-        @param surface as cairo.Surface
-        @param image as Gtk.Image
-        @param w as int
-        @param h as int
+        Get rounded surface from pixbuf
+        @param image as GdkPixbuf.Pixbuf/cairo.Surface
+        @return surface as cairo.Surface
+        @param scale_factor as int
+        @warning not thread safe!
     """
-    def do_blur(surface, w, h):
-        try:
-            from PIL import Image, ImageFilter
-            from array import array
-            width = surface.get_width()
-            height = surface.get_height()
-            data = surface.get_data()
-            tmp = Image.frombuffer("RGBA", (width, height),
-                                   data, "raw", "RGBA", 0, 1)
-
-            tmp = tmp.filter(ImageFilter.GaussianBlur(10))
-
-            imgd = tmp.tobytes()
-            a = array('B', imgd)
-            stride = width * 4
-            surface = cairo.ImageSurface.create_for_data(
-                a, cairo.FORMAT_ARGB32, width, height, stride)
-            # Special check for non square images
-            if w > width or h > height:
-                size = max(w, h)
-                resized = cairo.ImageSurface(cairo.FORMAT_ARGB32,
-                                             size,
-                                             size)
-                factor1 = size / width
-                factor2 = size / height
-                factor = max(factor1, factor2)
-                context = cairo.Context(resized)
-                context.scale(factor, factor)
-                context.set_source_surface(surface, 0, 0)
-                context.paint()
-                surface = resized
-        except Exception as e:
-            print("blur():", e)
-            return None
-        return surface
-    TaskHelper().run(do_blur, surface, w, h,
-                     callback=(image.set_from_surface,))
-
-
-def draw_rounded_image(image, ctx):
-    """
-        Draw rounded image
-        @param image as Gtk.Image
-        @param ctx as cairo.Context
-        @param size as int
-    """
-    if not image.is_drawable():
-        return
-    surface = None
-    if image.props.surface is None:
-        pixbuf = image.get_pixbuf()
-        if pixbuf is not None:
-            surface = Gdk.cairo_surface_create_from_pixbuf(
-                pixbuf,
-                image.get_scale_factor(),
-                None)
-    else:
-        surface = image.props.surface
-    if surface is not None:
-        width = surface.get_width() - 4
-        ctx.translate(2, 2)
-        ctx.new_sub_path()
-        radius = width / 2
-        ctx.arc(width / 2, width / 2, radius, 0, 2 * pi)
-        ctx.set_source_rgb(1, 1, 1)
-        ctx.fill_preserve()
-        ctx.set_line_width(2)
-        ctx.set_source_rgba(0, 0, 0, 0.3)
-        ctx.stroke_preserve()
-        ctx.set_source_surface(surface, 0, 0)
-        ctx.clip()
-        ctx.paint()
+    width = image.get_width()
+    is_pixbuf = isinstance(image, GdkPixbuf.Pixbuf)
+    if is_pixbuf:
+        width = int(width / scale_factor)
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, width)
+    ctx = cairo.Context(surface)
+    # Remove line width
+    ctx.translate(2, 2)
+    width -= 4
+    ctx.new_sub_path()
+    radius = width / 2
+    ctx.set_line_width(2)
+    # Same in .artwork-icon (application.css)
+    ctx.set_source_rgba(0, 0, 0, 0.3)
+    ctx.arc(width / 2, width / 2, radius, 0, 2 * pi)
+    ctx.stroke_preserve()
+    ctx.translate(-2, -2)
+    if is_pixbuf:
+        image = Gdk.cairo_surface_create_from_pixbuf(image, scale_factor, None)
+    ctx.set_source_surface(image, 0, 0)
+    ctx.clip()
+    ctx.paint()
+    return surface
 
 
 def set_proxy_from_gnome():
@@ -136,7 +86,7 @@ def set_proxy_from_gnome():
                     socks.set_default_proxy(socks.SOCKS4, h, p)
                     socket.socket = socks.socksocket
     except Exception as e:
-        print("set_proxy_from_gnome():", e)
+        Logger.error("set_proxy_from_gnome(): %s", e)
 
 
 def debug(str):
@@ -206,10 +156,12 @@ def is_audio(f):
              "audio/x-vorbis", "audio/x-vorbis+ogg", "audio/x-wav",
              "x-content/audio-player", "audio/x-aac", "audio/m4a",
              "audio/x-m4a", "audio/mp3", "audio/ac3", "audio/flac",
-             "audio/x-opus+ogg", "application/x-extension-mp4",
+             "audio/x-opus+ogg", "application/x-extension-mp4", "audio/x-ape",
              "audio/x-pn-aiff", "audio/x-pn-au", "audio/x-pn-wav",
              "audio/x-pn-windows-acm", "application/x-matroska",
-             "audio/x-matroska", "audio/x-wavpack", "video/mp4"]
+             "audio/x-matroska", "audio/x-wavpack", "video/mp4",
+             "audio/x-mod", "audio/x-mo3", "audio/x-xm", "audio/x-s3m",
+             "audio/x-it"]
     try:
         info = f.query_info("standard::content-type",
                             Gio.FileQueryInfoFlags.NONE)
@@ -217,8 +169,8 @@ def is_audio(f):
             content_type = info.get_content_type()
             if content_type in audio:
                 return True
-    except:
-        pass
+    except Exception as e:
+        Logger.error("is_audio: %s", e)
     return False
 
 
@@ -252,7 +204,7 @@ def format_artist_name(name):
     for special in _("The the").split():
         if name.startswith(special + " "):
             strlen = len(special) + 1
-            name = name[strlen:] + "@@@@" + special
+            name = name[strlen:] + ", " + special
     return name
 
 
@@ -265,6 +217,20 @@ def translate_artist_name(name):
     if len(split) == 2:
         name = split[1] + " " + split[0]
     return name
+
+
+def get_position_list(items, position):
+    """
+        Return a list with item and position
+        @param items as []
+        @param position as int
+        @return []
+    """
+    _items = []
+    for item in items:
+        _items.append((item, position))
+        position += 1
+    return _items
 
 
 def seconds_to_string(duration):
@@ -296,3 +262,41 @@ def remove_static_genres(genre_ids):
         @param genre ids as [int]
     """
     return [item for item in genre_ids if item >= 0]
+
+
+def get_icon_name(object_id, type=SelectionListMask.ARTISTS):
+    """
+        Return icon name for id
+        @param ojbect_id as int
+        @param type as SelectionListMask
+    """
+    icon = ""
+    if object_id == Type.POPULARS:
+        icon = "starred-symbolic"
+    elif object_id == Type.PLAYLISTS:
+        icon = "emblem-documents-symbolic"
+    elif object_id == Type.ALL:
+        icon = "media-optical-cd-audio-symbolic"
+    elif object_id == Type.ARTISTS:
+            icon = "avatar-default-symbolic"
+    elif object_id == Type.COMPILATIONS:
+        icon = "system-users-symbolic"
+    elif object_id == Type.RECENTS:
+        icon = "document-open-recent-symbolic"
+    elif object_id == Type.RADIOS:
+        icon = "audio-input-microphone-symbolic"
+    elif object_id < Type.DEVICES:
+        icon = "multimedia-player-symbolic"
+    elif object_id == Type.RANDOMS:
+        icon = "media-playlist-shuffle-symbolic"
+    elif object_id == Type.LOVED:
+        icon = "emblem-favorite-symbolic"
+    elif object_id == Type.NEVER:
+        icon = "audio-speakers-symbolic"
+    elif object_id == Type.YEARS:
+        icon = "view-sort-ascending-symbolic"
+    elif object_id == Type.CURRENT:
+        icon = "view-list-symbolic"
+    elif object_id == Type.SEARCH:
+        icon = "edit-find-symbolic"
+    return icon

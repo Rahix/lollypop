@@ -33,7 +33,6 @@ class BinPlayer(BasePlayer):
         """
             Init playbin
         """
-        Gst.init(None)
         BasePlayer.__init__(self)
         self.__codecs = Codecs()
         self._playbin = self.__playbin1 = Gst.ElementFactory.make(
@@ -59,17 +58,6 @@ class BinPlayer(BasePlayer):
             bus.connect("message::stream-start", self._on_stream_start)
             bus.connect("message::tag", self._on_bus_message_tag)
         self._start_time = 0
-
-    @property
-    def preview(self):
-        """
-            Get a preview bin
-            @return Gst.Element
-        """
-        if self.__preview is None:
-            self.__preview = Gst.ElementFactory.make("playbin", "player")
-            self.set_preview_output()
-        return self.__preview
 
     def set_preview_output(self):
         """
@@ -137,8 +125,8 @@ class BinPlayer(BasePlayer):
         """
             Change player state to STOPPED
         """
-        self._playbin.set_state(Gst.State.NULL)
         self._current_track = Track()
+        self._playbin.set_state(Gst.State.NULL)
         self.emit("status-changed")
         self.emit("current-changed")
 
@@ -165,7 +153,7 @@ class BinPlayer(BasePlayer):
             Seek current track to position
             @param position as seconds
         """
-        if self.locked or self._current_track.id is None:
+        if self.is_locked or self._current_track.id is None:
             return
         # Seems gstreamer doesn"t like seeking to end, sometimes
         # doesn"t go to next track
@@ -193,10 +181,21 @@ class BinPlayer(BasePlayer):
             return False
 
     @property
+    def preview(self):
+        """
+            Get a preview bin
+            @return Gst.Element
+        """
+        if self.__preview is None:
+            self.__preview = Gst.ElementFactory.make("playbin", "player")
+            self.set_preview_output()
+        return self.__preview
+
+    @property
     def position(self):
         """
             Return bin playback position
-            @HACK handle crossefade here, as we know we"re going to be
+            @HACK handle crossefade here, as we know we're going to be
             called every seconds
             @return position in Gst.SECOND
         """
@@ -248,8 +247,6 @@ class BinPlayer(BasePlayer):
             @param init volume as bool
             @return False if track not loaded
         """
-        if self.__need_to_stop():
-            return False
         if init_volume:
             self._plugins.volume.props.volume = 1.0
         Logger.debug("BinPlayer::_load_track(): %s" % track.uri)
@@ -292,12 +289,7 @@ class BinPlayer(BasePlayer):
         for scrobbler in App().scrobblers:
             if scrobbler.available:
                 scrobbler.playing_now(self._current_track)
-        try:
-            if not App().scanner.is_locked():
-                App().tracks.set_listened_at(self._current_track.id,
-                                             int(time()))
-        except:  # Locked database
-            pass
+        App().tracks.set_listened_at(self._current_track.id, int(time()))
 
     def _on_bus_message_tag(self, bus, message):
         """
@@ -361,7 +353,6 @@ class BinPlayer(BasePlayer):
         """
         Logger.debug("Player::__on_bus_eos(): %s" % self._current_track.uri)
         if self._playbin.get_bus() == bus:
-            self.stop()
             self._next_context = NextContext.NONE
             if self._next_track.id is not None:
                 self._load_track(self._next_track)
@@ -373,14 +364,14 @@ class BinPlayer(BasePlayer):
             @param playbin as Gst bin
         """
         Logger.debug("Player::__on_stream_about_to_finish(): %s" % playbin)
-        # Don"t do anything if crossfade on, track already changed
+        # Don't do anything if crossfade on, track already changed
         if self._crossfading:
             return
         if self._current_track.id == Type.RADIOS:
             return
         self._scrobble(self._current_track, self._start_time)
         # Increment popularity
-        if not App().scanner.is_locked() and self._current_track.id >= 0:
+        if self._current_track.id is not None and self._current_track.id >= 0:
             App().tracks.set_more_popular(self._current_track.id)
             # In party mode, linear popularity
             if self.is_party:
@@ -398,7 +389,12 @@ class BinPlayer(BasePlayer):
                     pop_to_add = 1
             App().albums.set_more_popular(self._current_track.album_id,
                                           pop_to_add)
-        if self._next_track.id is not None:
+        if self.__need_to_stop():
+            # We are in gstreamer thread
+            GLib.idle_add(self.stop)
+            # Reenable as it has been disabled by do_crossfading()
+            self.update_crossfading()
+        elif self._next_track.id is not None:
             self._load_track(self._next_track)
 
 #######################
@@ -477,28 +473,28 @@ class BinPlayer(BasePlayer):
             @param next as bool
         """
         # No cossfading if we need to stop
-        if self.__need_to_stop() and next:
+        if self.__need_to_stop():
+            self._crossfading = False
             return
 
         if track is None:
             self._scrobble(self._current_track, self._start_time)
             # Increment popularity
-            if not App().scanner.is_locked():
-                App().tracks.set_more_popular(self._current_track.id)
-                # In party mode, linear popularity
-                if self.is_party:
-                    pop_to_add = 1
-                # In normal mode, based on tracks count
+            App().tracks.set_more_popular(self._current_track.id)
+            # In party mode, linear popularity
+            if self.is_party:
+                pop_to_add = 1
+            # In normal mode, based on tracks count
+            else:
+                count = App().albums.get_tracks_count(
+                    self._current_track.album_id)
+                if count:
+                    pop_to_add = int(App().albums.max_count / count)
                 else:
-                    count = App().albums.get_tracks_count(
-                        self._current_track.album_id)
-                    if count:
-                        pop_to_add = int(App().albums.max_count / count)
-                    else:
-                        pop_to_add = 0
-                if pop_to_add > 0:
-                    App().albums.set_more_popular(self._current_track.album_id,
-                                                  pop_to_add)
+                    pop_to_add = 0
+            if pop_to_add > 0:
+                App().albums.set_more_popular(self._current_track.album_id,
+                                              pop_to_add)
 
         GLib.idle_add(self.__volume_down, self._playbin,
                       self._plugins, duration)
@@ -538,7 +534,7 @@ class BinPlayer(BasePlayer):
                 not self._playlist_ids) or\
                     playback == self._next_context:
                 stop = True
-        return stop and self.is_playing
+        return stop
 
     def __on_volume_changed(self, playbin, sink):
         """

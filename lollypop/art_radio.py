@@ -10,16 +10,15 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-from gi.repository import GLib, Gdk, GdkPixbuf, Gio
+from gi.repository import GLib, GdkPixbuf, Gio
 
 import re
 
-from lollypop.art_base import BaseArt
 from lollypop.helper_task import TaskHelper
 from lollypop.logger import Logger
 
 
-class RadioArt(BaseArt):
+class RadioArt:
     """
         Manage radio artwork
     """
@@ -28,8 +27,8 @@ class RadioArt(BaseArt):
     def __init__(self):
         """
             Init radio art
+            Should be inherited by a BaseArt
         """
-        BaseArt.__init__(self)
         d = Gio.File.new_for_path(self._RADIOS_PATH)
         if not d.query_exists():
             try:
@@ -56,10 +55,6 @@ class RadioArt(BaseArt):
                 self.get_radio_artwork(name, size, 1)
                 if f.query_exists():
                     return cache_path_png
-                else:
-                    return self._get_default_icon_path(
-                        size,
-                        "audio-input-microphone-symbolic")
         except Exception as e:
             Logger.error("RadioArt::get_radio_cache_path(): %s, %s" %
                          (e, ascii(filename)))
@@ -71,13 +66,12 @@ class RadioArt(BaseArt):
             @param radio name as string
             @param pixbuf size as int
             @param scale factor as int
-            @return cairo surface
+            @return GdkPixbuf.Pixbuf
         """
         size *= scale
         filename = self.__get_radio_cache_name(name)
         cache_path_png = "%s/%s_%s.png" % (self._CACHE_PATH, filename, size)
         pixbuf = None
-
         try:
             # Look in cache
             f = Gio.File.new_for_path(cache_path_png)
@@ -91,20 +85,11 @@ class RadioArt(BaseArt):
                     pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(path,
                                                                     size,
                                                                     size)
-            if pixbuf is None:
-                return self.get_default_icon(
-                    "audio-input-microphone-symbolic",
-                    size,
-                    scale)
-            pixbuf.savev(cache_path_png, "png", [None], [None])
-            surface = Gdk.cairo_surface_create_from_pixbuf(pixbuf, scale, None)
-            return surface
-
+            if pixbuf is not None:
+                pixbuf.savev(cache_path_png, "png", [None], [None])
         except Exception as e:
             Logger.error("RadioArt::get_radio_artwork(): %s" % e)
-            return self.get_default_icon("audio-input-microphone-symbolic",
-                                         size,
-                                         scale)
+        return pixbuf
 
     def copy_uri_to_cache(self, uri, name, size):
         """
@@ -220,7 +205,6 @@ class RadioArt(BaseArt):
             bytes = GLib.Bytes(content)
             stream = Gio.MemoryInputStream.new_from_bytes(bytes)
             pixbuf = GdkPixbuf.Pixbuf.new_from_stream(stream, None)
-            bytes.unref()
             stream.close()
             pixbuf.savev(cache_path_png, "png", [None], [None])
             self.emit("radio-artwork-changed", name)

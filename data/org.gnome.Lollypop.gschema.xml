@@ -33,34 +33,19 @@
             <summary>Window position</summary>
             <description>Window position (x and y).</description>
         </key>
-        <key type="ai" name="mini-size">
-            <default>[1,1]</default>
-            <summary>Mini player size</summary>
-            <description>Window size (width and height).</description>
-        </key>
-        <key type="ai" name="mini-position">
-            <default>[]</default>
-            <summary>Mini player position</summary>
-            <description>Window position (x and y).</description>
-        </key>
         <key type="ai" name="shown-album-lists">
-            <default>[-2, -997, -3, -5, -11]</default>
+            <default>[-2, -3, -4, -7, -12, -100]</default>
             <summary>INTERNAL</summary>
             <description></description>
         </key>
         <key type="ai" name="shown-playlists">
-            <default>[-2, -997, -3, -9]</default>
+            <default>[-2, -3]</default>
             <summary>INTERNAL</summary>
             <description></description>
         </key>
-        <key type="b" name="shown-sidebar-tooltip">
-            <default>false</default>
+        <key type="i" name="donation">
+            <default>0</default>
             <summary>INTERNAL</summary>
-            <description></description>
-        </key>
-        <key type="b" name="show-donation">
-            <default>true</default>
-            <summary>Allow user to donate to the project</summary>
             <description></description>
         </key>
         <key type="b" name="allow-per-track-cover">
@@ -92,6 +77,11 @@
             <default>[]</default>
             <summary>Enabled genres in party mode</summary>
             <description>ID for genres.</description>
+        </key>
+            <key type="ai" name="sync-internal-ids">
+            <default>[]</default>
+            <summary>INTERNAL</summary>
+            <description></description>
         </key>
         <key type="as" name="music-path">
             <default>[]</default>
@@ -193,6 +183,11 @@
             <summary>Disable use of client side window decorations (headerbar)</summary>
             <description></description>
         </key>
+         <key type="b" name="disable-scrobbling">
+            <default>false</default>
+            <summary>Disable scrobbling usage</summary>
+            <description></description>
+        </key>
         <key type="b" name="show-compilations">
             <default>false</default>
             <summary>Handle compilations</summary>
@@ -211,7 +206,12 @@
         <key type="b" name="smart-artist-sort">
             <default>true</default>
             <summary>Smart sort for artist</summary>
-            <description>Ex: The Beatles sorted as Beatles. Reset of database required.</description>
+            <description>Ex: The Beatles sorted as Beatles. Reset of database required</description>
+        </key>
+        <key type="b" name="show-artist-sort">
+            <default>false</default>
+            <summary>Show sort tag as artist. Reset of database may be required</summary>
+            <description>Ex: Beatles, The</description>
         </key>
         <key type="b" name="save-state">
             <default>false</default>
@@ -228,8 +228,12 @@
             <summary>Disable all notifications</summary>
         </key>
         <key type="b" name="disable-song-notifications">
-            <default>true</default>
+            <default>false</default>
             <summary>Disable notifications upon change of song</summary>
+        </key>
+        <key type="b" name="rotate-fullscreen-album">
+            <default>true</default>
+            <summary>Fullscreen album rotates</summary>
         </key>
         <key type="b" name="show-tag-tracknumber">
             <default>false</default>
@@ -241,8 +245,13 @@
             <summary>INTERNAL</summary>
             <description></description>
         </key>
-            <key type="i" name="paned-listview-width">
+        <key type="i" name="paned-listview-width">
             <default>200</default>
+            <summary>INTERNAL</summary>
+            <description></description>
+        </key>
+        <key type="i" name="paned-device-width">
+            <default>300</default>
             <summary>INTERNAL</summary>
             <description></description>
         </key>
@@ -251,12 +260,22 @@
             <summary>JPG cover quality</summary>
             <description>0-100</description>
         </key>
-        <key type="ai" name="list-one-ids">
+        <key type="ai" name="state-one-ids">
             <default>[]</default>
             <summary>INTERNAL</summary>
             <description></description>
         </key>
-        <key type="ai" name="list-two-ids">
+        <key type="ai" name="state-two-ids">
+            <default>[]</default>
+            <summary>INTERNAL</summary>
+            <description></description>
+        </key>
+        <key type="ai" name="startup-one-ids">
+            <default>[]</default>
+            <summary>INTERNAL</summary>
+            <description></description>
+        </key>
+        <key type="ai" name="startup-two-ids">
             <default>[]</default>
             <summary>INTERNAL</summary>
             <description></description>
@@ -276,9 +295,9 @@
             <summary>Smoothing duration</summary>
             <description></description>
         </key>
-        <key type="b" name="smart-previous">
+        <key type="b" name="lastfm-loved-status">
             <default>false</default>
-            <summary>Restart current track on previous</summary>
+            <summary>Last.fm loved track status</summary>
             <description></description>
         </key>
         <key enum="org.gnome.Lollypop.Shuffle" name="shuffle">

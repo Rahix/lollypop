@@ -39,7 +39,7 @@ class ArtistsDatabase:
         """
         if sortname == "":
             sortname = format_artist_name(name)
-        with SqlCursor(App().db) as sql:
+        with SqlCursor(App().db, True) as sql:
             result = sql.execute("INSERT INTO artists (name, sortname)\
                                   VALUES (?, ?)",
                                  (name, sortname))
@@ -52,7 +52,7 @@ class ArtistsDatabase:
             @param sort name a str
             @warning: commit needed
         """
-        with SqlCursor(App().db) as sql:
+        with SqlCursor(App().db, True) as sql:
             sql.execute("UPDATE artists\
                          SET sortname=?\
                          WHERE rowid=?",
@@ -147,24 +147,25 @@ class ArtistsDatabase:
         """
             Get all available album artists
             @param genre ids as [int]
-            @return Array of (artist id as int, artist name as string)
+            @return [int, str, str]
         """
+        if App().settings.get_value("show-artist-sort"):
+            select = "artists.rowid, artists.sortname, artists.sortname"
+        else:
+            select = "artists.rowid, artists.name, artists.sortname"
         with SqlCursor(App().db) as sql:
             result = []
             if not genre_ids or genre_ids[0] == Type.ALL:
                 # Only artist that really have an album
                 result = sql.execute(
-                    "SELECT DISTINCT artists.rowid,\
-                                  artists.name, artists.sortname\
-                                  FROM artists, albums, album_artists\
+                    "SELECT DISTINCT %s FROM artists, albums, album_artists\
                                   WHERE album_artists.artist_id=artists.rowid\
                                   AND album_artists.album_id=albums.rowid\
                                   ORDER BY artists.sortname\
-                                  COLLATE NOCASE COLLATE LOCALIZED")
+                                  COLLATE NOCASE COLLATE LOCALIZED" % select)
             else:
                 genres = tuple(genre_ids)
-                request = "SELECT DISTINCT artists.rowid,\
-                           artists.name, artists.sortname\
+                request = "SELECT DISTINCT %s\
                            FROM artists, albums, album_genres, album_artists\
                            WHERE artists.rowid=album_artists.artist_id\
                            AND albums.rowid=album_artists.album_id\
@@ -173,7 +174,7 @@ class ArtistsDatabase:
                     request += "album_genres.genre_id=? OR "
                 request += "1=0) ORDER BY artists.sortname\
                             COLLATE NOCASE COLLATE LOCALIZED"
-                result = sql.execute(request, genres)
+                result = sql.execute(request % select, genres)
             return [(row[0], row[1], row[2]) for row in result]
 
     def get_ids(self, genre_ids=[]):
@@ -227,11 +228,8 @@ class ArtistsDatabase:
             @return Array of id as int
         """
         with SqlCursor(App().db) as sql:
-            result = sql.execute("SELECT artists.rowid FROM artists, albums,\
-                                  album_artists\
+            result = sql.execute("SELECT artists.rowid FROM artists\
                                   WHERE noaccents(artists.name) LIKE ?\
-                                  AND album_artists.artist_id=artists.rowid\
-                                  AND album_artists.album_id=albums.rowid\
                                   LIMIT 25", ("%" + noaccents(string) + "%",))
             return list(itertools.chain(*result))
 
@@ -257,7 +255,7 @@ class ArtistsDatabase:
             @return cleaned as bool
             @warning commit needed
         """
-        with SqlCursor(App().db) as sql:
+        with SqlCursor(App().db, True) as sql:
             cleaned = False
             result = sql.execute("SELECT album_id from album_artists\
                                   WHERE artist_id=?\

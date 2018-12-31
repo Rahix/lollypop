@@ -12,12 +12,12 @@
 
 from gi.repository import Gtk
 
-from lollypop.loader import Loader
-from lollypop.define import App
+from lollypop.define import App, RowListType
+from lollypop.widgets_utils import Popover
 from lollypop.view_playlists import PlaylistsView
 
 
-class PlaylistsPopover(Gtk.Popover):
+class PlaylistsPopover(Popover):
     """
         Popover showing current albums
         @Warning: destroy it self on close
@@ -27,23 +27,21 @@ class PlaylistsPopover(Gtk.Popover):
         """
             Init Popover
         """
-        Gtk.Popover.__init__(self)
+        Popover.__init__(self)
         self.set_position(Gtk.PositionType.BOTTOM)
         self.connect("map", self.__on_map)
         self.connect("unmap", self.__on_unmap)
-        self._widget = PlaylistsView(App().player.get_playlist_ids(),
-                                     False)
-        self._widget.show()
-        self.add(self._widget)
+        self.__view = PlaylistsView(App().player.playlist_ids,
+                                    RowListType.DND | RowListType.POPOVER,
+                                    False)
+        self.__view.show()
+        self.add(self.__view)
 
     def populate(self):
         """
             Populate view
         """
-        def load():
-            return [track.id for track in App().player.get_playlist_tracks()]
-        loader = Loader(target=load, view=self._widget)
-        loader.start()
+        self.__view.populate(list(App().player.playlist_tracks))
 
 #######################
 # PRIVATE             #
@@ -53,7 +51,6 @@ class PlaylistsPopover(Gtk.Popover):
             Connect signals, populate and resize
             @param widget as Gtk.Widget
         """
-        self._stop = False
         self.populate()
         window_size = App().window.get_size()
         height = window_size[1]
@@ -62,8 +59,8 @@ class PlaylistsPopover(Gtk.Popover):
 
     def __on_unmap(self, widget):
         """
-            Disconnect signals, clear view
+            Stop view
             @param widget as Gtk.Widget
         """
-        self._stop = True
-        self.destroy()
+        self.__view.stop()
+        self.__view.destroy()

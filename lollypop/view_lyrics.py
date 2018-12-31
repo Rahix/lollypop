@@ -15,13 +15,15 @@ from gi.repository import Gtk, GLib, Gio
 from gettext import gettext as _
 
 from lollypop.view import View
-from lollypop.define import App, WindowSize, Type
-from lollypop.controllers import InfoController
+from lollypop.define import App, Sizing, Type
+from lollypop.controller_information import InformationController
 from lollypop.utils import escape
+from lollypop.logger import Logger
 from lollypop.helper_task import TaskHelper
+from lollypop.helper_art import ArtHelperEffect
 
 
-class LyricsView(View, InfoController):
+class LyricsView(View, InformationController):
     """
         Show lyrics for track
     """
@@ -31,17 +33,23 @@ class LyricsView(View, InfoController):
             Init view
         """
         View.__init__(self)
-        InfoController.__init__(self)
+        InformationController.__init__(self, False,
+                                       ArtHelperEffect.BLUR_HARD |
+                                       ArtHelperEffect.NO_RATIO)
+        self.__current_changed_id = None
         self.__size_allocate_timeout_id = None
         self.__downloads_running = 0
-        self.__lyrics_set = False
+        self.__lyrics_text = ""
         self.__current_width = self.__current_height = 0
         self.__cancellable = Gio.Cancellable()
         builder = Gtk.Builder()
         builder.add_from_resource("/org/gnome/Lollypop/LyricsView.ui")
         builder.connect_signals(self)
-        self._cover = builder.get_object("cover")
+        self._artwork = builder.get_object("cover")
         self.__lyrics_label = builder.get_object("lyrics_label")
+        self.__translate_button = builder.get_object("translate_button")
+        # We do not use View scrolled window because it does not work with
+        # an overlay
         self.add(builder.get_object("widget"))
         self.connect("size-allocate", self.__on_size_allocate)
 
@@ -51,17 +59,14 @@ class LyricsView(View, InfoController):
             @param track as Track
         """
         self.__current_track = track
-        self.update_artwork(self.__current_width,
-                            self.__current_height,
-                            True)
-        self.__lyrics_set = False
+        self.update_artwork(self.__current_width, self.__current_height)
+        self.__lyrics_text = ""
         self.__update_lyrics_style()
         self.__lyrics_label.set_text(_("Loading…"))
         self.__cancellable.cancel()
         self.__cancellable.reset()
         # First try to get lyrics from tags
         from lollypop.tagreader import TagReader
-        lyrics = None
         reader = TagReader()
         try:
             info = reader.get_info(self.__current_track.uri)
@@ -69,35 +74,72 @@ class LyricsView(View, InfoController):
             info = None
         if info is not None:
             tags = info.get_tags()
-            lyrics = reader.get_lyrics(tags)
-        if lyrics:
-            self.__lyrics_label.set_label(lyrics)
-        elif App().settings.get_value("network-access"):
+            self.__lyrics_text = reader.get_lyrics(tags)
+        if self.__lyrics_text:
+            self.__lyrics_label.set_label(self.__lyrics_text)
+        else:
             self.__download_wikia_lyrics()
             self.__download_genius_lyrics()
-        else:
-            self.__lyrics_label.set_label(_("Network access disabled"))
 
 ##############
 # PROTECTED  #
 ##############
-    def _on_current_changed(self, player):
+    def _on_translate_toggled(self, button):
         """
-            Update lyrics
-            @param player as Player
+            Translate lyrics
+            @param button as Gtk.Button
         """
-        self.populate(App().player.current_track)
+        if button.get_active():
+            App().task_helper.run(self.__get_blob, self.__lyrics_text,
+                                  callback=(self.__lyrics_label.set_text,))
+        else:
+            self.__lyrics_label.set_text(self.__lyrics_text)
+
+    def _on_map(self, widget):
+        """
+            Set active ids
+        """
+        if App().settings.get_value("show-sidebar"):
+            App().window.emit("can-go-back-changed", True)
+            App().window.emit("show-can-go-back", True)
+        self.__current_changed_id = App().player.connect(
+            "current-changed", self.__on_current_changed)
+
+    def __on_unmap(self, widget):
+        """
+            Connect player signal
+        """
+        if self.__current_changed_id is not None:
+            App().player.disconnect(self.__current_changed_id)
+            self.__current_changed_id = None
 
 ############
 # PRIVATE  #
 ############
+    def __get_blob(self, text):
+        """
+            Translate text with current user locale
+            @param text as str
+        """
+        try:
+            locales = GLib.get_language_names()
+            user_code = locales[0].split(".")[0]
+            try:
+                from textblob.blob import TextBlob
+            except:
+                return _("You need to install python3-textblob module")
+            blob = TextBlob(text)
+            return str(blob.translate(to=user_code))
+        except Exception as e:
+            Logger.error("LyricsView::__get_blob(): %s", e)
+            return _("Can't translate this lyrics")
+
     def __download_wikia_lyrics(self):
         """
             Downloas lyrics from wikia
         """
         self.__downloads_running += 1
         # Update lyrics
-        task_helper = TaskHelper()
         if self.__current_track.id == Type.RADIOS:
             split = self.__current_track.name.split(" - ")
             if len(split) < 2:
@@ -120,12 +162,12 @@ class LyricsView(View, InfoController):
                 None,
                 False)
         uri = "http://lyrics.wikia.com/wiki/%s:%s" % (artist, title)
-        task_helper.load_uri_content(
-            uri,
-            self.__cancellable,
-            self.__on_lyrics_downloaded,
-            "lyricbox",
-            "\n")
+        helper = TaskHelper()
+        helper.load_uri_content(uri,
+                                self.__cancellable,
+                                self.__on_lyrics_downloaded,
+                                "lyricbox",
+                                "\n")
 
     def __download_genius_lyrics(self):
         """
@@ -133,7 +175,6 @@ class LyricsView(View, InfoController):
         """
         self.__downloads_running += 1
         # Update lyrics
-        task_helper = TaskHelper()
         if self.__current_track.id == Type.RADIOS:
             split = App().player.current_track.name.split(" - ")
             if len(split) < 2:
@@ -141,16 +182,16 @@ class LyricsView(View, InfoController):
             artist = split[0]
             title = split[1]
         else:
-            artist = self.__current_track.artists[0]
+            artist = self.__current_track.artists
             title = self.__current_track.name
         string = escape("%s %s" % (artist, title))
         uri = "https://genius.com/%s-lyrics" % string.replace(" ", "-")
-        task_helper.load_uri_content(
-            uri,
-            self.__cancellable,
-            self.__on_lyrics_downloaded,
-            "song_body-lyrics",
-            "")
+        helper = TaskHelper()
+        helper.load_uri_content(uri,
+                                self.__cancellable,
+                                self.__on_lyrics_downloaded,
+                                "song_body-lyrics",
+                                "")
 
     def __update_lyrics_style(self):
         """
@@ -161,11 +202,11 @@ class LyricsView(View, InfoController):
             context.remove_class(cls)
         context.add_class("lyrics")
         width = self.get_allocated_width()
-        if width > WindowSize.XXLARGE:
+        if width > Sizing.LARGE:
             context.add_class("lyrics-x-large")
-        elif width > WindowSize.MONSTER:
+        elif width > Sizing.MONSTER:
             context.add_class("lyrics-large")
-        elif width > WindowSize.BIG:
+        elif width > Sizing.BIG:
             context.add_class("lyrics-medium")
 
     def __handle_size_allocation(self):
@@ -174,9 +215,7 @@ class LyricsView(View, InfoController):
         """
         self.__size_allocate_timeout_id = None
         self.__update_lyrics_style()
-        self.update_artwork(self.__current_width,
-                            self.__current_height,
-                            True)
+        self.update_artwork(self.__current_width, self.__current_height)
 
     def __on_size_allocate(self, widget, allocation):
         """
@@ -206,17 +245,25 @@ class LyricsView(View, InfoController):
             @param separator as str
         """
         self.__downloads_running -= 1
-        if self.__lyrics_set:
+        if self.__lyrics_text:
             return
         if status:
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(data, 'html.parser')
             try:
-                lyrics_text = soup.find_all(
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(data, 'html.parser')
+                self.__lyrics_text = soup.find_all(
                     "div", class_=cls)[0].get_text(separator=separator)
-                self.__lyrics_label.set_text(lyrics_text)
-                self.__lyrics_set = True
-            except:
-                pass
-        if not self.__lyrics_set and self.__downloads_running == 0:
-            self.__lyrics_label.set_text(_("No lyrics found ") + "😐")
+                self.__lyrics_label.set_text(self.__lyrics_text)
+            except Exception as e:
+                Logger.warning("LyricsView::__on_lyrics_downloaded(): %s", e)
+        if not self.__lyrics_text and self.__downloads_running == 0:
+            self.__lyrics_label.set_text(_("No lyrics found ") + "😓")
+            self.__translate_button.set_sensitive(False)
+
+    def __on_current_changed(self, player):
+        """
+            Update lyrics
+            @param player as Player
+        """
+        self.populate(App().player.current_track)
+        self.__translate_button.set_sensitive(True)

@@ -12,7 +12,8 @@
 
 from gi.repository import Gtk
 
-from lollypop.controllers import ProgressController
+from lollypop.define import App
+from lollypop.controller_progress import ProgressController
 
 
 class ToolbarTitle(Gtk.Bin, ProgressController):
@@ -46,21 +47,12 @@ class ToolbarTitle(Gtk.Bin, ProgressController):
         """
         self.set_property("width_request", width)
 
-    def show_hide_volume_control(self):
+    def set_mini(self, mini):
         """
-            Show/Hide volume control
+            Show/hide
+            @param mini as bool
         """
-        self._progress.clear_marks()
-        self._show_volume_control = not self._show_volume_control
-        self._update_state()
-
-    def add_mark(self, position):
-        """
-            Add a mark at position
-            @param position as float
-        """
-        if position > 0:
-            self._progress.add_mark(position, Gtk.PositionType.BOTTOM, None)
-#######################
-# PRIVATE             #
-#######################
+        if mini:
+            self.hide()
+        elif App().player.current_track.id is not None:
+            self.show()

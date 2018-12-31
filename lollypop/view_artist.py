@@ -10,15 +10,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-from gi.repository import Gtk, Gdk, Pango, GLib, Gio, GdkPixbuf
+from gi.repository import Gtk, Gdk, Pango, GLib
 
 from gettext import gettext as _
-from random import choice
 
-from lollypop.define import App, ArtSize, Shuffle
-from lollypop.utils import get_network_available, draw_rounded_image
+from lollypop.define import App, ArtSize
+from lollypop.utils import get_network_available
 from lollypop.objects import Album
-from lollypop.information_store import InformationStore
 from lollypop.pop_artwork import ArtworkPopover
 from lollypop.view_artist_albums import ArtistAlbumsView
 from lollypop.logger import Logger
@@ -35,10 +33,8 @@ class ArtistView(ArtistAlbumsView):
             @param artist id as int (Current if None)
             @param genre id as int
         """
-        ArtistAlbumsView.__init__(self, artist_ids, genre_ids, ArtSize.BIG)
+        ArtistAlbumsView.__init__(self, artist_ids, genre_ids, True)
         self.__art_signal_id = None
-        self.connect("realize", self.__on_realize)
-        self.connect("unrealize", self.__on_unrealize)
 
         builder = Gtk.Builder()
         builder.add_from_resource("/org/gnome/Lollypop/ArtistView.ui")
@@ -60,8 +56,10 @@ class ArtistView(ArtistAlbumsView):
         self._overlay.add_overlay(self.__grid)
         self.__empty = Gtk.Grid()
         self.__empty.show()
-        self._albumbox.add(self.__empty)
-        self._albumbox.set_row_spacing(20)
+        self._album_box.add(self.__empty)
+        self._album_box.set_row_spacing(20)
+        self._album_box.set_margin_start(10)
+        self._album_box.set_margin_end(10)
 
         self.__scale_factor = self.__artwork.get_scale_factor()
         self.__set_artwork()
@@ -87,12 +85,12 @@ class ArtistView(ArtistAlbumsView):
             Jump to current album
         """
         widget = None
-        for child in self._albumbox.get_children():
+        for child in self._album_box.get_children():
             if child.album.id == App().player.current_track.album.id:
                 widget = child
                 break
         if widget is not None:
-            y = widget.get_current_ordinate(self._albumbox)
+            y = widget.get_current_ordinate(self._album_box)
             self._scrolled.get_vadjustment().set_value(
                 y - self.__empty.get_property("height-request"))
 
@@ -106,16 +104,12 @@ class ArtistView(ArtistAlbumsView):
         """
         ArtistAlbumsView._on_value_changed(self, adj)
         if adj.get_value() == adj.get_lower():
-            if self.__artwork.props.surface is not None or\
-                    self.__artwork.get_pixbuf() is not None:
-                self.__artwork.show()
+            if self.__artwork.get_visible():
                 self.__artwork_box.show()
             self.__grid.get_style_context().remove_class("header-borders")
             self.__grid.get_style_context().add_class("header")
         else:
-            if self.__artwork.props.surface is not None or\
-                    self.__artwork.get_pixbuf() is not None:
-                self.__artwork.hide()
+            if self.__artwork.get_visible():
                 self.__artwork_box.hide()
             self.__grid.get_style_context().add_class("header-borders")
             self.__grid.get_style_context().remove_class("header")
@@ -125,15 +119,22 @@ class ArtistView(ArtistAlbumsView):
             Change cursor on label
             @param eventbox as Gtk.EventBox
         """
-        if len(self._artist_ids) == 1:
-            eventbox.get_window().set_cursor(Gdk.Cursor(Gdk.CursorType.HAND2))
+        try:
+            if len(self._artist_ids) == 1:
+                eventbox.get_window().set_cursor(
+                    Gdk.Cursor(Gdk.CursorType.HAND2))
+        except:
+            Logger.warning(_("You are using a broken cursor theme!"))
 
     def _on_artwork_box_realize(self, eventbox):
         """
             Change cursor on image
             @param eventbox as Gtk.EventBox
         """
-        eventbox.get_window().set_cursor(Gdk.Cursor(Gdk.CursorType.HAND2))
+        try:
+            eventbox.get_window().set_cursor(Gdk.Cursor(Gdk.CursorType.HAND2))
+        except:
+            Logger.warning(_("You are using a broken cursor theme!"))
 
     def _on_label_button_release(self, eventbox, event):
         """
@@ -167,27 +168,9 @@ class ArtistView(ArtistAlbumsView):
             if App().player.is_party:
                 App().lookup_action("party").change_state(
                     GLib.Variant("b", False))
-            album_ids = App().albums.get_ids(self._artist_ids,
-                                             self._genre_ids)
-            if album_ids:
-                track = None
-                if App().settings.get_enum("shuffle") == Shuffle.TRACKS:
-                    album_id = choice(album_ids)
-                    album_tracks = Album(album_id).tracks
-                    if album_tracks:
-                        track = choice(album_tracks)
-                else:
-                    if App().settings.get_enum("shuffle") == Shuffle.ALBUMS:
-                        album_id = choice(album_ids)
-                    else:
-                        album_id = album_ids[0]
-                    album_tracks = Album(album_id).tracks
-                    if album_tracks:
-                        track = album_tracks[0]
-                if track.id is not None:
-                    App().player.play_albums(track,
-                                             self._genre_ids,
-                                             self._artist_ids)
+            App().player.play_albums(None,
+                                     self._genre_ids,
+                                     self._artist_ids)
             self.__update_icon(False)
         except Exception as e:
             Logger.error("ArtistView::_on_play_clicked: %s" % e)
@@ -198,49 +181,44 @@ class ArtistView(ArtistAlbumsView):
         """
         try:
             album_ids = App().albums.get_ids(self._artist_ids, self._genre_ids)
-            player_ids = [album.id for album in App().player.albums]
+            len_album_ids = len(album_ids)
+            player_album_ids = App().player.album_ids
+            len_player_album_ids = len(player_album_ids)
             icon_name = self.__add_button.get_image().get_icon_name()[0]
             add = icon_name == "list-add-symbolic"
             for album_id in album_ids:
-                in_player = album_id in player_ids
-                if add and not in_player:
+                if add and album_id not in player_album_ids:
                     App().player.add_album(Album(album_id))
-                elif not add and in_player:
-                    App().player.remove_album(Album(album_id))
+                elif not add and album_id in player_album_ids:
+                    if len_player_album_ids > len_album_ids and\
+                            App().player.current_track.album.id == album_id:
+                        App().player.skip_album()
+                    App().player.remove_album_by_id(album_id)
+            if len_player_album_ids == len_album_ids:
+                App().player.stop()
             self.__update_icon(not add)
-        except:
-            pass  # Artist not available anymore for this context
+        except Exception as e:
+            Logger.error("ArtistView::_on_add_clicked: %s" % e)
 
-    def _on_jump_button_clicked(self, widget):
+    def _on_jump_button_clicked(self, button):
         """
             Scroll to album
+            @parma button as Gtk.Button
         """
         self.jump_to_current()
 
-    def _on_lastfm_button_clicked(self, widget):
+    def _on_lastfm_button_toggled(self, button):
         """
             Show lastfm similar artists
+            @param button as Gtk.Button
         """
-        from lollypop.pop_lastfm import LastfmPopover
-        popover = LastfmPopover()
-        popover.set_relative_to(widget)
-        popover.populate(self._artist_ids)
-        popover.show()
-
-    def _on_artwork_draw(self, image, ctx):
-        """
-            Draw rounded image
-            @param image as Gtk.Image
-            @param ctx as cairo.Context
-        """
-        if image.get_style_context().has_class("artwork-icon"):
-            return
-        # Update image if scale factor changed
-        if self.__scale_factor != image.get_scale_factor():
-            self.__scale_factor = image.get_scale_factor()
-            self.__set_artwork()
-        draw_rounded_image(image, ctx)
-        return True
+        if button.get_active():
+            from lollypop.pop_lastfm import LastfmPopover
+            popover = LastfmPopover()
+            popover.set_relative_to(button)
+            popover.populate(self._artist_ids)
+            popover.connect("closed", lambda x: button.set_active(False))
+            popover.popup()
 
     def _on_current_changed(self, player):
         """
@@ -250,78 +228,101 @@ class ArtistView(ArtistAlbumsView):
         ArtistAlbumsView._on_current_changed(self, player)
         self.__update_jump_button()
 
-    def _on_populated(self, widget, widgets, scroll_value):
+    def _on_populated(self, widget):
         """
             Set jump button state
             @param widget as AlbumDetailedWidget
-            @param widgets as pending AlbumDetailedWidgets
-            @param scroll value as float
         """
         self.__update_jump_button()
-        ArtistAlbumsView._on_populated(self, widget, widgets, scroll_value)
+        ArtistAlbumsView._on_populated(self, widget)
+
+    def _on_map(self, widget):
+        """
+            Connect signals and set active ids
+            @param widget as Gtk.Widget
+        """
+        self.__art_signal_id = App().art.connect(
+                                           "artist-artwork-changed",
+                                           self.__on_artist_artwork_changed)
+        self.__party_signal_id = App().player.connect(
+                                                "party-changed",
+                                                self.__on_album_changed)
+        self.__added_signal_id = App().player.connect(
+                                                "album-added",
+                                                self.__on_album_changed)
+        self.__removed_signal_id = App().player.connect(
+                                                  "album-removed",
+                                                  self.__on_album_changed)
+        self.__lock_signal_id = App().player.connect(
+                                               "lock-changed",
+                                               self.__on_lock_changed)
+        App().settings.set_value("state-one-ids",
+                                 GLib.Variant("ai", self._genre_ids))
+        App().settings.set_value("state-two-ids",
+                                 GLib.Variant("ai", self._artist_ids))
+
+    def _on_unmap(self, widget):
+        """
+            Disconnect signals
+            @param widget as Gtk.Widget
+        """
+        if self.__art_signal_id is not None:
+            App().art.disconnect(self.__art_signal_id)
+            self.__art_signal_id = None
+        if self.__party_signal_id is not None:
+            App().player.disconnect(self.__party_signal_id)
+            self.__party_signal_id = None
+        if self.__added_signal_id is not None:
+            App().player.disconnect(self.__added_signal_id)
+            self.__added_signal_id = None
+        if self.__removed_signal_id is not None:
+            App().player.disconnect(self.__removed_signal_id)
+            self.__removed_signal_id = None
+        if self.__lock_signal_id is not None:
+            App().player.disconnect(self.__lock_signal_id)
+            self.__lock_signal_id = None
 
 #######################
 # PRIVATE             #
 #######################
-    def __set_artwork(self):
+    def __set_header_height(self):
         """
-            Set artist artwork
+            Set header height based on font height and artwork height
         """
-        artwork_height = 0
-        scale_factor = self.__artwork.get_scale_factor()
-        if App().settings.get_value("artist-artwork"):
-            if len(self._artist_ids) == 1 and\
-                    App().settings.get_value("artist-artwork"):
-                artist = App().artists.get_name(self._artist_ids[0])
-                size = ArtSize.ARTIST_SMALL * scale_factor
-                if not App().window.container.is_paned_stack:
-                    size *= 2
-                path = InformationStore.get_artwork_path(artist, size)
-                if path is not None:
-                    f = Gio.File.new_for_path(path)
-                    (status, data, tag) = f.load_contents(None)
-                    if status:
-                        bytes = GLib.Bytes(data)
-                        stream = Gio.MemoryInputStream.new_from_bytes(bytes)
-                        bytes.unref()
-                        pixbuf = GdkPixbuf.Pixbuf.new_from_stream_at_scale(
-                            stream,
-                            size,
-                            size,
-                            True,
-                            None)
-                        stream.close()
-                        surface = Gdk.cairo_surface_create_from_pixbuf(
-                            pixbuf,
-                            scale_factor,
-                            None)
-                        self.__artwork.set_from_surface(surface)
-                        artwork_height = surface.get_height()
-                        self.__artwork.get_style_context().remove_class(
-                            "artwork-icon")
-                        self.__artwork.show()
-                        self.__artwork_box.show()
-            # Add a default icon
-            if len(self._artist_ids) == 1 and artwork_height == 0:
-                self.__artwork.set_from_icon_name(
-                    "avatar-default-symbolic",
-                    Gtk.IconSize.DND)
-                artwork_height = 16 * scale_factor
-                self.__artwork.get_style_context().add_class("artwork-icon")
-                self.__artwork.show()
-                self.__artwork_box.show()
-
         # Create an self.__empty widget with header height
         ctx = self.__label.get_pango_context()
         layout = Pango.Layout.new(ctx)
         layout.set_text("a", 1)
         # Font scale 2
         font_height = int(layout.get_pixel_size()[1]) * 2
-
+        if self.__artwork.props.surface is not None:
+            artwork_height = self.__artwork.props.surface.get_height()
+        else:
+            self.__artwork.get_style_context().add_class("artwork-icon")
+            artwork_height = 32
         if artwork_height > font_height:
             self.__empty.set_property("height-request", artwork_height)
         else:
             self.__empty.set_property("height-request", font_height)
+
+    def __set_artwork(self):
+        """
+            Set artist artwork
+        """
+        if len(self._artist_ids) == 1 and\
+                App().settings.get_value("artist-artwork"):
+            artist = App().artists.get_name(self._artist_ids[0])
+            size = ArtSize.ARTIST_SMALL
+            if not App().window.is_adaptive:
+                size *= 2
+            App().art_helper.set_artist_artwork(
+                                        artist,
+                                        size,
+                                        size,
+                                        self.__artwork.get_scale_factor(),
+                                        self.__on_artist_artwork)
+        else:
+            self.__set_header_height()
 
     def __update_jump_button(self):
         """
@@ -356,45 +357,6 @@ class ArtistView(ArtistAlbumsView):
                 "list-remove-symbolic",
                 Gtk.IconSize.MENU)
 
-    def __on_realize(self, widget):
-        """
-            Connect signal
-            @param widget as Gtk.Widget
-        """
-        player = App().player
-        art = App().art
-        self.__art_signal_id = art.connect("artist-artwork-changed",
-                                           self.__on_artist_artwork_changed)
-        self.__party_signal_id = player.connect("party-changed",
-                                                self.__on_album_changed)
-        self.__added_signal_id = player.connect("album-added",
-                                                self.__on_album_changed)
-        self.__removed_signal_id = player.connect("album-removed",
-                                                  self.__on_album_changed)
-        self.__lock_signal_id = player.connect("lock-changed",
-                                               self.__on_lock_changed)
-
-    def __on_unrealize(self, widget):
-        """
-            Disconnect signal
-            @param widget as Gtk.Widget
-        """
-        if self.__art_signal_id is not None:
-            App().art.disconnect(self.__art_signal_id)
-            self.__art_signal_id = None
-        if self.__party_signal_id is not None:
-            App().player.disconnect(self.__party_signal_id)
-            self.__party_signal_id = None
-        if self.__added_signal_id is not None:
-            App().player.disconnect(self.__added_signal_id)
-            self.__added_signal_id = None
-        if self.__removed_signal_id is not None:
-            App().player.disconnect(self.__removed_signal_id)
-            self.__removed_signal_id = None
-        if self.__lock_signal_id is not None:
-            App().player.disconnect(self.__lock_signal_id)
-            self.__lock_signal_id = None
-
     def __on_album_changed(self, player, album_id=None):
         """
             Update icon
@@ -402,7 +364,7 @@ class ArtistView(ArtistAlbumsView):
             @param album_id as int
         """
         albums = App().albums.get_ids(self._artist_ids, self._genre_ids)
-        album_ids = [album.id for album in App().player.albums]
+        album_ids = App().player.album_ids
         self.__update_icon(len(set(albums) & set(album_ids)) != len(albums))
 
     def __on_lock_changed(self, player):
@@ -410,8 +372,8 @@ class ArtistView(ArtistAlbumsView):
             Lock buttons
             @param player as Player
         """
-        self.__add_button.set_sensitive(not player.locked)
-        self.__play_button.set_sensitive(not player.locked)
+        self.__add_button.set_sensitive(not player.is_locked)
+        self.__play_button.set_sensitive(not player.is_locked)
 
     def __on_artist_artwork_changed(self, art, prefix):
         """
@@ -423,3 +385,17 @@ class ArtistView(ArtistAlbumsView):
         if prefix == artist:
             self.__artwork.clear()
             self.__set_artwork()
+
+    def __on_artist_artwork(self, surface):
+        """
+            Set artist artwork
+            @param surface as cairo.Surface
+        """
+        if surface is None:
+            self.__artwork.set_from_icon_name("avatar-default-symbolic",
+                                              Gtk.IconSize.DND)
+        else:
+            self.__artwork.set_from_surface(surface)
+            self.__artwork.get_style_context().remove_class("artwork-icon")
+        self.__artwork.show()
+        self.__set_header_height()

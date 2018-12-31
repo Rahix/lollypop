@@ -27,18 +27,15 @@
     </ul>
   </description>
   <releases>
-    <release version="0.9.521" date="2018-07-17">
+    <release version="0.9.610" date="2018-10-28">
       <description>
-        <ul>
-          <li>Fix issues with party mode"</li>
-        </ul>
-      </description>
-    </release>
-    <release version="0.9.520" date="2018-07-16">
-      <description>
-        <ul>
-          <li>Fix shuffle menu</li>
-        </ul>
+        <ul>New navigation mode when sidebar is off</ul>
+        <ul>New smart playlists</ul>
+        <ul>Faster album loading</ul>
+        <ul>Faster track loading</ul>
+        <ul>Better sync to device</ul>
+        <ul>Restore playback position on start</ul>
+        <ul>Better adaptive mode: radio support, toolbar buttons, search, ...</ul>
       </description>
     </release>
   </releases>
@@ -48,12 +45,15 @@
   </categories>
   <screenshots>
     <screenshot type="default">
-      <image type="source" width="1920" height="1053">https://adishatz.org/lollypop.jpg</image>
+      <image type="source" width="1680" height="1023">https://adishatz.org/lollypop1.png</image>
+      <image type="source" width="1680" height="1023">https://adishatz.org/lollypop2.png</image>
+      <image type="source" width="400" height="617">https://adishatz.org/lollypop3.png</image>
     </screenshot>
   </screenshots>
-  <url type="homepage">https://gnumdk.github.io/lollypop-web/</url>
+  <url type="homepage">https://wiki.gnome.org/Apps/Lollypop</url>
   <url type="bugtracker">https://gitlab.gnome.org/gnumdk/lollypop/issues</url>
-  <url type="donation">https://flattr.com/@lollypop</url>
+  <url type="donation">https://www.paypal.me/lollypopgnome</url>
   <url type="translate">https://hosted.weblate.org/projects/gnumdk/</url>
+  <content_rating type="oars-1.1" />
   <update_contact>cedric.bellegarde@adishatz.org</update_contact>
 </component>

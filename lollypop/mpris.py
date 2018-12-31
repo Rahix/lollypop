@@ -20,6 +20,7 @@ from random import randint
 
 from lollypop.logger import Logger
 from lollypop.define import App, ArtSize, Type, Shuffle, NextContext
+from lollypop.objects import Track
 
 
 class Server:
@@ -201,7 +202,7 @@ class MPRIS(Server):
         App().settings.connect("changed::playback", self.__on_playback_changed)
 
     def Raise(self):
-        self.__app.window.setup_window()
+        self.__app.window.setup()
         self.__app.window.present_with_time(Gtk.get_current_event_time())
 
     def Quit(self):
@@ -209,9 +210,13 @@ class MPRIS(Server):
 
     def Next(self):
         App().player.next()
+        if App().notify is not None:
+            App().notify.lock(2000)
 
     def Previous(self):
         App().player.prev()
+        if App().notify is not None:
+            App().notify.lock(2000)
 
     def Pause(self):
         App().player.pause()
@@ -232,7 +237,9 @@ class MPRIS(Server):
         App().player.seek(position / (1000 * 1000))
 
     def OpenUri(self, uri):
-        pass
+        track_id = App().tracks.get_id_by_uri(uri)
+        if track_id:
+            App().player.load(Track(track_id))
 
     def Seek(self, offset):
         # Convert position in seconds
@@ -424,10 +431,10 @@ class MPRIS(Server):
             if App().player.current_track.id == Type.RADIOS:
                 cover_path = App().art.get_radio_cache_path(
                     ", ".join(App().player.current_track.artists),
-                    ArtSize.MONSTER)
+                    ArtSize.BIG)
             else:
                 cover_path = App().art.get_album_cache_path(
-                    App().player.current_track.album, ArtSize.MONSTER)
+                    App().player.current_track.album, ArtSize.BIG, ArtSize.BIG)
             if cover_path is not None:
                 self.__metadata["mpris:artUrl"] = GLib.Variant(
                     "s",

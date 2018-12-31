@@ -16,11 +16,10 @@ from gettext import gettext as _
 
 from lollypop.widgets_rating import RatingWidget
 from lollypop.widgets_loved import LovedWidget
-from lollypop.define import App, Type, TAG_EDITORS
+from lollypop.define import App
 from lollypop.objects import Track, Album
+from lollypop.widgets_utils import Popover
 from lollypop.logger import Logger
-from lollypop.helper_dbus import DBusHelper
-from lollypop.helper_task import TaskHelper
 
 
 class BaseMenu(Gio.Menu):
@@ -48,23 +47,11 @@ class ArtistMenu(BaseMenu):
             @param object as Album/Track
         """
         BaseMenu.__init__(self, object)
-        if self.__filter_artist_ids():
-            self.__set_artists_actions()
+        self.__set_artists_actions()
 
 #######################
 # PRIVATE             #
 #######################
-    def __filter_artist_ids(self):
-        """
-            Remove static entries
-            @return [int]
-        """
-        artist_ids = []
-        for artist_id in self._object.artist_ids:
-            if artist_id > 0:
-                artist_ids.append(artist_id)
-        return artist_ids
-
     def __set_artists_actions(self):
         """
             Set queue actions
@@ -81,7 +68,11 @@ class ArtistMenu(BaseMenu):
             @param Gio.SimpleAction
             @param GLib.Variant
         """
-        App().window.container.show_artists_albums(self.__filter_artist_ids())
+        if App().settings.get_value("show-sidebar"):
+            App().window.container.show_artists_albums(
+                 self._object.artist_ids)
+        else:
+            App().window.container.show_view(self._object.artist_ids[0])
 
 
 class QueueMenu(BaseMenu):
@@ -114,7 +105,7 @@ class QueueMenu(BaseMenu):
             del_queue_action = Gio.SimpleAction(name="del_queue_action")
             App().add_action(del_queue_action)
             del_queue_action.connect("activate",
-                                     self.__del_from_queue)
+                                     self.__remove_from_queue)
             self.append(_("Remove from queue"), "app.del_queue_action")
 
     def __append_to_queue(self, action, variant):
@@ -126,13 +117,13 @@ class QueueMenu(BaseMenu):
         App().player.append_to_queue(self._object.id, False)
         App().player.emit("queue-changed")
 
-    def __del_from_queue(self, action, variant):
+    def __remove_from_queue(self, action, variant):
         """
             Delete track id from queue
             @param Gio.SimpleAction
             @param GLib.Variant
         """
-        App().player.del_from_queue(self._object.id, False)
+        App().player.remove_from_queue(self._object.id, False)
         App().player.emit("queue-changed")
 
 
@@ -161,26 +152,6 @@ class PlaylistsMenu(BaseMenu):
         playlist_action.connect("activate",
                                 self.__add_to_playlists)
         self.append(_("Add to others"), "app.playlist_action")
-
-        playlist_action = Gio.SimpleAction(name="playlist_not_in_party")
-        App().add_action(playlist_action)
-        if isinstance(self._object, Album):
-            exists = App().playlists.exists_album(Type.NOPARTY,
-                                                  self._object)
-        else:
-            exists = App().playlists.exists_track(Type.NOPARTY,
-                                                  self._object)
-        if exists:
-            self.append(_('Remove from "Not in party"'),
-                        "app.playlist_not_in_party")
-            playlist_action.connect("activate",
-                                    self.__remove_from_playlist, Type.NOPARTY)
-        else:
-            self.append(_('Add to "Not in party"'),
-                        "app.playlist_not_in_party")
-            playlist_action.connect("activate",
-                                    self.__add_to_playlist, Type.NOPARTY)
-
         i = 0
         for playlist in App().playlists.get_last():
             action = Gio.SimpleAction(name="playlist%s" % i)
@@ -190,7 +161,7 @@ class PlaylistsMenu(BaseMenu):
                                                       self._object)
             else:
                 exists = App().playlists.exists_track(playlist[0],
-                                                      self._object)
+                                                      self._object.uri)
             if exists:
                 action.connect("activate",
                                self.__remove_from_playlist,
@@ -223,19 +194,15 @@ class PlaylistsMenu(BaseMenu):
         def add(playlist_id):
             tracks = []
             if isinstance(self._object, Album):
-                track_ids = App().albums.get_track_ids(self._object.id,
-                                                       self._object.genre_ids,
-                                                       self._object.artist_ids)
-                for track_id in track_ids:
+                for track_id in self._object.track_ids:
                     tracks.append(Track(track_id))
             else:
                 tracks = [Track(self._object.id)]
-            App().playlists.add_tracks(playlist_id, tracks)
-            if playlist_id in App().player.get_playlist_ids():
+            App().playlists.add_tracks(playlist_id, tracks, True)
+            if playlist_id in App().player.playlist_ids:
                 App().player.update_playlist(
                     App().playlists.get_track_ids(playlist_id))
-        helper = TaskHelper()
-        helper.run(add, playlist_id)
+        App().task_helper.run(add, playlist_id)
 
     def __remove_from_playlist(self, action, variant, playlist_id):
         """
@@ -249,19 +216,15 @@ class PlaylistsMenu(BaseMenu):
         def remove(playlist_id):
             tracks = []
             if isinstance(self._object, Album):
-                track_ids = App().albums.get_track_ids(self._object.id,
-                                                       self._object.genre_ids,
-                                                       self._object.artist_ids)
-                for track_id in track_ids:
+                for track_id in self._object.track_ids:
                     tracks.append(Track(track_id))
             else:
                 tracks = [Track(self._object.id)]
-            App().playlists.remove_tracks(playlist_id, tracks)
-            if playlist_id in App().player.get_playlist_ids():
+            App().playlists.remove_tracks(playlist_id, tracks, True)
+            if playlist_id in App().player.playlist_ids:
                 App().player.update_playlist(
                     App().playlists.get_track_ids(playlist_id))
-        helper = TaskHelper()
-        helper.run(remove, playlist_id)
+        App().task_helper.run(remove, playlist_id)
 
     def __add_to_loved(self, action, variant):
         """
@@ -302,6 +265,8 @@ class ToolbarMenu(BaseMenu):
         if track.id >= 0:
             playlist_menu = PlaylistsMenu(track)
             self.insert_section(1, _("Playlists"), playlist_menu)
+        self.insert_section(2, _("Artist"),
+                            ArtistMenu(track))
 
 #######################
 # PRIVATE             #
@@ -325,24 +290,14 @@ class EditMenu(BaseMenu):
             Init edit menu
             @param object as Album/Track
         """
-        # Search for available tag editors
-        self.__editor = App().settings.get_value("tag-editor").get_string()
-        if not self.__editor:
-            for tag_editor in TAG_EDITORS:
-                if GLib.find_program_in_path(tag_editor) is not None:
-                    self.__editor = tag_editor
-                    break
         # Ignore genre_ids/artist_ids
         if isinstance(object, Album):
             obj = Album(object.id)
         else:
             obj = Track(object.id)
         BaseMenu.__init__(self, obj)
-
-        dbus_helper = DBusHelper()
-        dbus_helper.call("CanLaunchTagEditor",
-                         GLib.Variant("(s)", (self.__editor,)),
-                         self.__on_can_launch_tag_editor, None)
+        if App().art.tag_editor:
+            self.__set_edit_actions()
 
 #######################
 # PRIVATE             #
@@ -363,24 +318,20 @@ class EditMenu(BaseMenu):
             @param GLib.Variant
         """
         path = GLib.filename_from_uri(self._object.uri)[0]
-        dbus_helper = DBusHelper()
-        dbus_helper.call("LaunchTagEditor",
-                         GLib.Variant("(ss)", (self.__editor, path)),
-                         None, None)
-
-    def __on_can_launch_tag_editor(self, source, result, data):
-        """
-            Add action if launchable
-            @param source as GObject.Object
-            @param result as Gio.AsyncResult
-            @param data as object
-        """
+        if GLib.find_program_in_path("flatpak-spawn") is not None:
+            argv = ["flatpak-spawn", "--host", App().art.tag_editor, path]
+        else:
+            argv = [App().art.tag_editor, path]
         try:
-            source_result = source.call_finish(result)
-            if source_result is not None and source_result[0]:
-                self.__set_edit_actions()
+            (pid, stdin, stdout, stderr) = GLib.spawn_async(
+                argv, flags=GLib.SpawnFlags.SEARCH_PATH |
+                GLib.SpawnFlags.STDOUT_TO_DEV_NULL,
+                standard_input=False,
+                standard_output=False,
+                standard_error=False
+            )
         except Exception as e:
-            Logger.error("EditMenu::__on_can_launch_tag_editor(): %s" % e)
+            Logger.error("MenuPopover::__edit_tag(): %s" % e)
 
 
 class AlbumMenu(Gio.Menu):
@@ -427,7 +378,41 @@ class TrackMenu(Gio.Menu):
                             EditMenu(track))
 
 
-class TrackMenuPopover(Gtk.Popover):
+class RemoveMenuPopover(Gtk.PopoverMenu):
+    """
+        Contextual menu for removing Rows
+    """
+
+    def __init__(self, rows):
+        """
+            Init menu
+            @param rows as [Row]
+        """
+        Gtk.PopoverMenu.__init__(self)
+        self.__rows = rows
+        button = Gtk.ModelButton.new()
+        if len(rows) == 1:
+            button.set_label(_("Remove track"))
+        else:
+            button.set_label(_("Remove tracks"))
+        button.show()
+        button.connect("clicked", self.__on_button_clicked)
+        self.add(button)
+
+#######################
+# PRIVATE             #
+#######################
+    def __on_button_clicked(self, button):
+        """
+            Remove rows
+            @param button as Gtk.ModelButton
+        """
+        from lollypop.widgets_row_dnd import DNDRow
+        for r in self.__rows:
+            DNDRow.destroy_track_row(r)
+
+
+class TrackMenuPopover(Popover):
     """
         Contextual menu widget for a track
     """
@@ -438,23 +423,20 @@ class TrackMenuPopover(Gtk.Popover):
             @param track as Track
             @param menu as Gio.Menu
         """
-        Gtk.Popover.__init__(self)
+        Popover.__init__(self)
         if menu is not None:
             self.bind_model(menu, None)
-        # FIXME Does it works? => year in popover
-        if track.year != track.album.year:
-            track_year = str(track.year)
-        else:
-            track_year = ""
 
-        if track_year != "":
-            year = Gtk.Label()
-            year.set_text(track_year)
-            year.set_margin_end(5)
-            year.get_style_context().add_class("dim-label")
-            year.set_property("halign", Gtk.Align.END)
-            year.set_property("hexpand", True)
-            year.show()
+        if track.year is not None:
+            year_label = Gtk.Label()
+            year_label.set_text(str(track.year))
+            dt = GLib.DateTime.new_from_unix_local(track.timestamp)
+            year_label.set_tooltip_text(dt.format(_("%Y-%m-%d")))
+            year_label.set_margin_end(5)
+            year_label.get_style_context().add_class("dim-label")
+            year_label.set_property("halign", Gtk.Align.END)
+            year_label.set_property("hexpand", True)
+            year_label.show()
 
         # Hack to add two widgets in popover
         grid = Gtk.Grid()
@@ -473,23 +455,19 @@ class TrackMenuPopover(Gtk.Popover):
         hgrid.get_style_context().add_class("popover-rating-loved-grid")
         rating = RatingWidget(track)
         rating.set_property("halign", Gtk.Align.START)
-        rating.set_property("hexpand", True)
+        rating.set_margin_end(10)
         rating.show()
 
         loved = LovedWidget(track)
-        loved.set_margin_end(5)
-        if track_year == "":
-            loved.set_property("halign", Gtk.Align.END)
-        else:
-            loved.set_property("halign", Gtk.Align.CENTER)
+        loved.set_property("halign", Gtk.Align.START)
         loved.set_property("hexpand", True)
         loved.show()
 
         hgrid.add(rating)
         hgrid.add(loved)
 
-        if track_year != "":
-            hgrid.add(year)
+        if track.year is not None:
+            hgrid.add(year_label)
         hgrid.show()
 
         grid.add(hgrid)

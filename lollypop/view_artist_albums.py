@@ -10,53 +10,40 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-from gi.repository import Gtk, GLib, GObject
-
-from gettext import gettext as _
+from gi.repository import Gtk, GLib
 
 from lollypop.view import LazyLoadingView
-from lollypop.define import App, ArtSize
+from lollypop.define import App
 from lollypop.widgets_album_detailed import AlbumDetailedWidget
+from lollypop.controller_view import ViewController, ViewControllerType
 
 
-class ArtistAlbumsView(LazyLoadingView):
+class ArtistAlbumsView(LazyLoadingView, ViewController):
     """
         Show artist albums and tracks
     """
-    __gsignals__ = {
-        "populated": (GObject.SignalFlags.RUN_FIRST, None, ()),
-    }
 
-    def __init__(self, artist_ids, genre_ids, art_size):
+    def __init__(self, artist_ids, genre_ids, show_covers):
         """
             Init ArtistAlbumsView
             @param artist ids as [int]
             @param genre ids as [int]
-            @param art size as ArtSize
+            @param show_covers as bool
         """
         LazyLoadingView.__init__(self, True)
+        ViewController.__init__(self, ViewControllerType.ALBUM)
         self._artist_ids = artist_ids
         self._genre_ids = genre_ids
-        self.__art_size = art_size
-        self.__spinner = Gtk.Spinner()
-        self.__spinner.set_hexpand(True)
-        self.__spinner.set_vexpand(True)
-        spinner_size = int(ArtSize.BIG / 3)
-        self.__spinner.set_size_request(spinner_size, spinner_size)
-        self.__spinner.set_property("halign", Gtk.Align.CENTER)
-        self.__spinner.set_property("valign", Gtk.Align.CENTER)
-        self.__spinner.show()
+        self.__show_covers = show_covers
+        self._album_box = Gtk.Grid()
+        self._album_box.set_row_spacing(5)
+        self._album_box.set_property("orientation", Gtk.Orientation.VERTICAL)
+        self._album_box.show()
+        self._viewport.add(self._album_box)
 
-        self._albumbox = Gtk.Grid()
-        self._albumbox.set_row_spacing(5)
-        self._albumbox.set_property("orientation", Gtk.Orientation.VERTICAL)
-        self._albumbox.show()
-        self._viewport.add(self._albumbox)
-
-        self._albumbox.set_property("valign", Gtk.Align.START)
+        self._album_box.set_property("valign", Gtk.Align.START)
         self._overlay = Gtk.Overlay.new()
         self._overlay.add(self._scrolled)
-        self._overlay.add_overlay(self.__spinner)
         self._overlay.show()
         self.add(self._overlay)
 
@@ -65,63 +52,37 @@ class ArtistAlbumsView(LazyLoadingView):
             Populate the view
             @param albums as [Album]
         """
-        if albums:
-            if len(albums) != 1:
-                self.__spinner.start()
-            self.__add_albums(albums)
-        else:
-            label = Gtk.Label.new()
-            string = GLib.markup_escape_text(_("Network access disabled"))
-            label.set_markup(
-                '<span font_weight="bold" size="xx-large">' +
-                string +
-                "</span>")
-            label.set_property("halign", Gtk.Align.CENTER)
-            label.set_hexpand(True)
-            label.show()
-            self.set_sensitive(False)
-            self._albumbox.add(label)
+        self.__add_albums(albums)
 
-    def lazy_loading(self, widgets=[], scroll_value=0):
+    def stop(self):
         """
-            Load the view in a lazy way
-            @param widgets as [AlbumSimpleWidgets]
-            @param scroll_value as float
+            Stop current loading widget
         """
-        widget = None
-        if self._stop or self._scroll_value != scroll_value:
-            return
-        if widgets:
-            widget = widgets.pop(0)
-            self._lazy_queue.remove(widget)
-        elif self._lazy_queue:
-            widget = self._lazy_queue.pop(0)
-        if widget is not None:
-            widget.connect("populated", self._on_populated,
-                           widgets, scroll_value)
-            widget.populate()
+        LazyLoadingView.stop(self)
+        for child in self.children:
+            child.stop()
 
     def jump_to_current(self):
         """
             Jump to current album
         """
         widget = None
-        for child in self._albumbox.get_children():
+        for child in self._album_box.get_children():
             if child.id == App().player.current_track.album.id:
                 widget = child
                 break
         if widget is not None:
-            y = widget.get_current_ordinate(self._albumbox)
+            y = widget.get_current_ordinate(self._album_box)
             self._scrolled.get_vadjustment().set_value(y)
 
     @property
     def children(self):
         """
-            View children
-            @return [AlbumDetailedWidget]
+            Get children
+            @return AlbumDetailedwidget
         """
         children = []
-        for child in self._albumbox.get_children():
+        for child in self._album_box.get_children():
             if isinstance(child, AlbumDetailedWidget):
                 children.append(child)
         return children
@@ -129,6 +90,25 @@ class ArtistAlbumsView(LazyLoadingView):
 #######################
 # PROTECTED           #
 #######################
+    def _on_current_changed(self, player):
+        """
+            Update children state
+            @param player as Player
+        """
+        for child in self.children:
+            child.set_selection()
+            child.set_playing_indicator()
+
+    def _on_artwork_changed(self, artwork, album_id):
+        """
+            Update children artwork if matching album id
+            @param artwork as Artwork
+            @param album_id as int
+        """
+        for child in self.children:
+            if child.album.id == album_id:
+                child.set_artwork()
+
     def _on_search_changed(self, entry):
         """
             Update filter
@@ -139,19 +119,16 @@ class ArtistAlbumsView(LazyLoadingView):
             for box in child.boxes:
                 box.invalidate_filter()
 
-    def _on_populated(self, widget, widgets, scroll_value):
+    def _on_populated(self, widget):
         """
             Add another album/disc
-            @param widget as AlbumDetailedWidget
-            @param widgets as pending AlbumDetailedWidgets
-            @param scroll value as float
+            @param widget as AlbumWidget/TracksView
         """
-        if not widget.is_populated():
-            widget.populate()
-        elif not self._stop:
-            GLib.idle_add(self.lazy_loading, widgets, scroll_value)
-        else:
-            self._stop = False
+        LazyLoadingView._on_populated(self, widget)
+        if widget.is_populated:
+            widget.set_filter_func(self._filter_func)
+            widget.connect("overlayed", self.on_overlayed)
+            widget.set_opacity(1)
 
 #######################
 # PRIVATE             #
@@ -162,20 +139,18 @@ class ArtistAlbumsView(LazyLoadingView):
             repeat operation until album list is empty
             @param albums as [Album]
         """
-        if albums and not self._stop:
+        if self._lazy_queue is None:
+            return
+        if albums:
             album = albums.pop(0)
             widget = AlbumDetailedWidget(album,
                                          self._genre_ids,
                                          self._artist_ids,
-                                         self.__art_size)
-            widget.set_filter_func(self._filter_func)
-            widget.connect("overlayed", self._on_overlayed)
-            self._lazy_queue.append(widget)
+                                         self.__show_covers)
+            widget.set_opacity(0)
             widget.show()
-            self._albumbox.add(widget)
+            self._lazy_queue.append(widget)
+            self._album_box.add(widget)
             GLib.idle_add(self.__add_albums, albums)
         else:
-            self.__spinner.stop()
-            self.__spinner.hide()
-            self.emit("populated")
             GLib.idle_add(self.lazy_loading)

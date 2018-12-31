@@ -15,6 +15,7 @@
 
 from gi.repository import Gio, GLib
 
+
 LOLLYPOP_DATA_PATH = GLib.get_user_data_dir() + "/lollypop"
 
 App = Gio.Application.get_default
@@ -37,19 +38,14 @@ class GstPlayFlags:
     GST_PLAY_FLAG_TEXT = 1 << 3   # We want subtitle output
 
 
-class Loading:
-    NONE = 0
-    LEFT = 1
-    RIGHT = 2
-    ALL = 3
-    STOP = 4
-
-
-class ResponsiveType:
-    FIXED = 0
-    DND = 1
-    SEARCH = 2
-    LIST = 3
+class RowListType:
+    DEFAULT = 1 << 0
+    TWO_COLUMNS = 1 << 1
+    DND = 1 << 2
+    SEARCH = 1 << 3
+    READ_ONLY = 1 << 4
+    PLAYLISTS = 1 << 5
+    POPOVER = 1 << 6
 
 
 class ArtSize:
@@ -57,12 +53,24 @@ class ArtSize:
     SMALL = 33
     MEDIUM = 48  # If changed, adapt width request in AlbumRow
     ARTIST_SMALL = 60
-    HEADER = 100
+    LARGE = 100
     BIG = 200
+    ROUNDED = 300
     FULLSCREEN = 500
     ARTIST = 800
     MONSTER = 900
     MAX = 4000
+
+
+class SelectionListMask:
+        LIST_ONE = 1 << 1
+        LIST_TWO = 1 << 2
+        LIST_DEVICE = 1 << 3
+        ARTISTS = 1 << 4
+        GENRE = 1 << 5
+        PLAYLISTS = 1 << 6
+        COMPILATIONS = 1 << 7
+        ALL_ARTISTS = 1 << 8
 
 
 class Shuffle:
@@ -78,12 +86,12 @@ class PowerManagement:
     BOTH = 3             # Inhibit screensaver and suspend
 
 
-class WindowSize:
+class Sizing:
     SMALL = 400
     MEDIUM = 500
     BIG = 700
     MONSTER = 800
-    XXLARGE = 1000
+    LARGE = 1000
 
 
 class OrderBy:
@@ -99,24 +107,21 @@ class Type:
     POPULARS = -2
     RANDOMS = -3
     RECENTS = -4
-    PLAYLISTS = -5
-    RADIOS = -6
-    EXTERNALS = -7
-    SEARCH = -8
-    NOPARTY = -9
-    ALBUMS = -10
-    ALL = -11
-    USB_DISKS = -12
-    LOVED = -997
-    NEVER = -998
+    LOVED = -5
+    NEVER = -6
+    PLAYLISTS = -7
+    RADIOS = -8
+    SMART = -9
+    SEARCH = -10
+    INFO = -11
+    YEARS = -12
+    ARTISTS = -13
+    ALL = -100
+    CURRENT = -101
+    USB_DISKS = -200
     DEVICES = -1000
     SEPARATOR = -2000
     COMPILATIONS = -2001
-
-
-PROXY_BUS = "org.gnome.Lollypop.Portal"
-PROXY_PATH = "/org/gnome/LollypopPortal"
-PROXY_INTERFACE = "org.gnome.Lollypop.Portal"
 
 
 SPOTIFY_CLIENT_ID = "0b144843878a46b2b12e0958c342c3ac"
@@ -126,3 +131,17 @@ ENCODING = ["utf_8",
             "iso8859_1",
             "utf_16",
             "utf_16_be"]
+
+STATIC_ALBUM_NAME = {
+    Type.POPULARS: "Popular albums",
+    Type.RANDOMS: "Random albums",
+    Type.LOVED: "Loved albums",
+    Type.RECENTS: "Recently added albums",
+    Type.NEVER: "Unplayed albums",
+    Type.PLAYLISTS: "Playlists",
+    Type.RADIOS: "Radios",
+    Type.YEARS: "Years",
+    Type.ALL: "All albums",
+    Type.COMPILATIONS: "Compilations",
+    Type.USB_DISKS: "USB disks",
+}

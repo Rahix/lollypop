@@ -12,15 +12,17 @@
 
 from gi.repository import Gtk, Gio, Gdk, GLib, Gst
 
+from gettext import gettext as _
+
 from lollypop.container import Container
-from lollypop.define import App, WindowSize
+from lollypop.define import App, Sizing, Type
 from lollypop.toolbar import Toolbar
-from lollypop.helper_task import TaskHelper
 from lollypop.logger import Logger
+from lollypop.adaptive import AdaptiveWindow
 from lollypop.utils import is_unity
 
 
-class Window(Gtk.ApplicationWindow):
+class Window(Gtk.ApplicationWindow, AdaptiveWindow):
     """
         Main window
     """
@@ -29,18 +31,19 @@ class Window(Gtk.ApplicationWindow):
         """
             Init window
         """
+        Gtk.ApplicationWindow.__init__(self,
+                                       application=App(),
+                                       title="Lollypop",
+                                       icon_name="org.gnome.Lollypop")
+        AdaptiveWindow.__init__(self)
         self.__signal1 = None
         self.__signal2 = None
         self.__timeout = None
         self.__miniplayer = None
         self.__mediakeys = None
         self.__media_keys_busnames = []
-        self.__was_maximized = False
-        Gtk.ApplicationWindow.__init__(self,
-                                       application=App(),
-                                       title="Lollypop",
-                                       icon_name="org.gnome.Lollypop")
-        self.connect("hide", self.__on_hide)
+        self.connect("map", self.__on_map)
+        self.connect("unmap", self.__on_unmap)
         App().player.connect("current-changed", self.__on_current_changed)
         self.__timeout_configure = None
         seek_action = Gio.SimpleAction.new("seek",
@@ -54,128 +57,28 @@ class Window(Gtk.ApplicationWindow):
 
         self.__setup_global_shortcuts()
 
-        self.__main_stack = Gtk.Stack()
-        self.__main_stack.set_transition_duration(1000)
-        self.__main_stack.set_transition_type(
-            Gtk.StackTransitionType.CROSSFADE)
-        self.__main_stack.show()
-
         self.__setup_content()
+
         # FIXME Remove this, handled by MPRIS in GNOME 3.26
         self.__setup_media_keys()
-        self.__enabled_shortcuts = False
-        self.enable_global_shortcuts(True)
         self.set_auto_startup_notification(False)
-        self.connect("destroy", self.__on_destroyed_window)
         self.connect("realize", self.__on_realize)
+        self.connect("adaptive-changed", self.__on_adaptive_changed)
 
-    def enable_global_shortcuts(self, enable):
-        """
-            Enable/Disable special global shortcuts
-            @param enable as bool
-        """
-        if self.__enabled_shortcuts == enable:
-            return
-        self.__enabled_shortcuts = enable
-        if enable:
-            if Gtk.Widget.get_default_direction() == Gtk.TextDirection.RTL:
-                App().set_accels_for_action("app.seek(10)", ["Left"])
-                App().set_accels_for_action("app.seek(20)", ["<Control>Left"])
-                App().set_accels_for_action("app.seek(-10)", ["Right"])
-                App().set_accels_for_action("app.seek(-20)",
-                                            ["<Control>Right"])
-            else:
-                App().set_accels_for_action("app.seek(10)", ["Right"])
-                App().set_accels_for_action("app.seek(20)", ["<Control>Right"])
-                App().set_accels_for_action("app.seek(-10)", ["Left"])
-                App().set_accels_for_action("app.seek(-20)", ["<Control>Left"])
-
-            App().set_accels_for_action("app.shortcut::play_pause",
-                                        ["space", "c"])
-            App().set_accels_for_action("app.shortcut::play", ["x"])
-            App().set_accels_for_action("app.shortcut::stop", ["v"])
-            App().set_accels_for_action("app.shortcut::next", ["n"])
-            App().set_accels_for_action("app.shortcut::prev", ["p"])
-            App().set_accels_for_action("app.shortcut::loved", ["l"])
-        else:
-            App().set_accels_for_action("app.seek(10)", [None])
-            App().set_accels_for_action("app.seek(20)", [None])
-            App().set_accels_for_action("app.seek(-10)", [None])
-            App().set_accels_for_action("app.seek(-20)", [None])
-            App().set_accels_for_action("app.shortcut::play_pause", [None])
-            App().set_accels_for_action("app.shortcut::play", [None])
-            App().set_accels_for_action("app.shortcut::stop", [None])
-            App().set_accels_for_action("app.shortcut::play_pause", [None])
-            App().set_accels_for_action("app.shortcut::play", [None])
-            App().set_accels_for_action("app.shortcut::stop", [None])
-            App().set_accels_for_action("app.shortcut::next", [None])
-            App().set_accels_for_action("app.shortcut::next_album", [None])
-            App().set_accels_for_action("app.shortcut::prev", [None])
-            App().set_accels_for_action("app.shortcut::loved", [None])
-
-    def setup_window(self):
+    def setup(self):
         """
             Setup window position and size, callbacks
         """
-        self.__setup_pos_size("window")
+        size = App().settings.get_value("window-size")
+        pos = App().settings.get_value("window-position")
+        self.__setup_size(size)
+        self.__setup_pos(pos)
         if App().settings.get_value("window-maximized"):
             # Lets resize happen
             GLib.idle_add(self.maximize)
-
-    def responsive_design(self):
-        """
-            Handle responsive design
-        """
-        size = self.get_size()
-        self.__toolbar.set_content_width(size[0])
-        if size[0] < WindowSize.BIG:
-            self.__container.paned_stack(True)
+            self.do_adaptive_mode(self._ADAPTIVE_STACK)
         else:
-            self.__container.paned_stack(False)
-        if size[0] < WindowSize.XXLARGE:
-            self.__show_miniplayer(True)
-            self.__main_stack.show()
-            self.__miniplayer.set_vexpand(False)
-            self.__toolbar.title.hide()
-            self.__toolbar.info.hide()
-            self.__toolbar.end.set_minimal(True)
-        else:
-            self.__main_stack.show()
-            self.__show_miniplayer(False)
-            self.__toolbar.title.show()
-            self.__toolbar.info.show()
-            self.__toolbar.end.set_minimal(False)
-        if size[1] < WindowSize.MEDIUM and\
-                self.__miniplayer is not None and\
-                self.__miniplayer.is_visible():
-            self.__main_stack.hide()
-            self.__miniplayer.set_vexpand(True)
-
-    def set_mini(self):
-        """
-            Set mini player on/off
-        """
-        if App().player.current_track.id is None:
-            return
-        was_maximized = self.is_maximized()
-        if self.__main_stack.get_visible_child_name() == "main":
-            if self.is_maximized():
-                self.unmaximize()
-                GLib.timeout_add(100, self.__setup_pos_size, "mini")
-            else:
-                self.__setup_pos_size("mini")
-        elif self.__was_maximized:
-            self.maximize()
-        else:
-            self.__setup_pos_size("window")
-        self.__was_maximized = was_maximized
-
-    @property
-    def toolbar(self):
-        """
-            toolbar as Toolbar
-        """
-        return self.__toolbar
+            self.do_adaptive_mode(size[0])
 
     def do_event(self, event):
         """
@@ -185,10 +88,24 @@ class Window(Gtk.ApplicationWindow):
         """
         if event.type == Gdk.EventType.FOCUS_CHANGE and\
                 self.__container.view is not None:
-            if hasattr(self.__container.view, "disable_overlay"):
-                self.__container.view.disable_overlay()
+            self.__container.view.disable_overlay()
             App().player.preview.set_state(Gst.State.NULL)
         Gtk.ApplicationWindow.do_event(self, event)
+
+    @property
+    def miniplayer(self):
+        """
+            True if miniplayer is on
+            @return bool
+        """
+        return self.__miniplayer is not None
+
+    @property
+    def toolbar(self):
+        """
+            toolbar as Toolbar
+        """
+        return self.__toolbar
 
     @property
     def container(self):
@@ -199,7 +116,7 @@ class Window(Gtk.ApplicationWindow):
         return self.__container
 
 ############
-# Private  #
+# PRIVATE  #
 ############
     def __setup_global_shortcuts(self):
         """
@@ -207,11 +124,13 @@ class Window(Gtk.ApplicationWindow):
         """
         App().set_accels_for_action("app.shortcut::locked", ["<Control>l"])
         App().set_accels_for_action("app.shortcut::filter", ["<Control>i"])
-        App().set_accels_for_action("app.shortcut::volume", ["<Alt>v"])
-        App().set_accels_for_action("app.shortcut::lyrics", ["<Alt>l"])
+        App().set_accels_for_action("app.shortcut::volume",
+                                    ["<Control><Alt>v"])
+        App().set_accels_for_action("app.shortcut::lyrics",
+                                    ["<Control><Alt>l"])
         App().set_accels_for_action("app.shortcut::next_album", ["<Control>n"])
         App().set_accels_for_action("app.shortcut::current_artist",
-                                    ["<Alt>a"])
+                                    ["<Control><Alt>a"])
         App().set_accels_for_action("app.shortcut::show_genres",
                                     ["<Control>g"])
         App().set_accels_for_action("app.shortcut::show_sidebar", ["F9"])
@@ -223,6 +142,30 @@ class Window(Gtk.ApplicationWindow):
         App().set_accels_for_action("app.shortcuts", ["F2"])
         App().set_accels_for_action("app.help", ["F1"])
         App().set_accels_for_action("app.quit", ["<Control>q"])
+        if Gtk.Widget.get_default_direction() == Gtk.TextDirection.RTL:
+            App().set_accels_for_action("app.seek(10)", ["<Alt>Left"])
+            App().set_accels_for_action("app.seek(20)",
+                                        ["<Control><Shift>Left"])
+            App().set_accels_for_action("app.seek(-10)", ["<Alt>Right"])
+            App().set_accels_for_action("app.seek(-20)",
+                                        ["<Control><Shift>Right"])
+        else:
+            App().set_accels_for_action("app.seek(10)",
+                                        ["<Alt>Right"])
+            App().set_accels_for_action("app.seek(20)",
+                                        ["<Control><Shift>Right"])
+            App().set_accels_for_action("app.seek(-10)",
+                                        ["<Alt>Left"])
+            App().set_accels_for_action("app.seek(-20)",
+                                        ["<Control><Shift>Left"])
+
+        App().set_accels_for_action("app.shortcut::play_pause",
+                                    ["space", "<Alt>c"])
+        App().set_accels_for_action("app.shortcut::play", ["<Alt>x"])
+        App().set_accels_for_action("app.shortcut::stop", ["<Alt>v"])
+        App().set_accels_for_action("app.shortcut::next", ["<Alt>n"])
+        App().set_accels_for_action("app.shortcut::prev", ["<Alt>p"])
+        App().set_accels_for_action("app.shortcut::loved", ["<Alt>l"])
 
     def __show_miniplayer(self, show):
         """
@@ -233,37 +176,31 @@ class Window(Gtk.ApplicationWindow):
             from lollypop.miniplayer import MiniPlayer
             self.__miniplayer = MiniPlayer(self.get_size()[0])
             self.__vgrid.add(self.__miniplayer)
+            self.__toolbar.set_mini(True)
         elif not show and self.__miniplayer is not None:
+            self.__toolbar.set_mini(False)
             self.__miniplayer.destroy()
             self.__miniplayer = None
 
-    def __setup_pos_size(self, name):
+    def __setup_size(self, size):
         """
-            Set window pos and size based on name
-            @param name as str
+            Set window size
+            @param size as (int, int)
         """
-        size_setting = App().settings.get_value("%s-size" % name)
-        if len(size_setting) == 2 and\
-           isinstance(size_setting[0], int) and\
-           isinstance(size_setting[1], int):
-            self.resize(size_setting[0], size_setting[1])
-        if name == "window":
-            self.__setup_pos(name)
-        else:
-            # We need position to happen after resize as previous
-            # may be refused by window manager => mini player as bottom
-            GLib.idle_add(self.__setup_pos, name)
+        if len(size) == 2 and\
+           isinstance(size[0], int) and\
+           isinstance(size[1], int):
+            self.resize(size[0], size[1])
 
-    def __setup_pos(self, name):
+    def __setup_pos(self, pos):
         """
             Set window position
-            @param name as str
+            @param pos as (int, int)
         """
-        position_setting = App().settings.get_value("%s-position" % name)
-        if len(position_setting) == 2 and\
-           isinstance(position_setting[0], int) and\
-           isinstance(position_setting[1], int):
-            self.move(position_setting[0], position_setting[1])
+        if len(pos) == 2 and\
+           isinstance(pos[0], int) and\
+           isinstance(pos[1], int):
+            self.move(pos[0], pos[1])
 
     # FIXME Remove this, handled by MPRIS in GNOME 3.26
     def __setup_media_keys(self):
@@ -345,11 +282,14 @@ class Window(Gtk.ApplicationWindow):
             Setup window content
         """
         self.__container = Container()
+        self.set_stack(self.container.stack)
+        self.add_paned(self.container.paned_one, self.container.list_one)
+        self.add_paned(self.container.paned_two, self.container.list_two)
         self.__container.show()
         self.__vgrid = Gtk.Grid()
         self.__vgrid.set_orientation(Gtk.Orientation.VERTICAL)
         self.__vgrid.show()
-        self.__toolbar = Toolbar()
+        self.__toolbar = Toolbar(self)
         self.__toolbar.show()
         if App().settings.get_value("disable-csd") or is_unity():
             self.__vgrid.add(self.__toolbar)
@@ -357,15 +297,38 @@ class Window(Gtk.ApplicationWindow):
             self.set_titlebar(self.__toolbar)
             self.__toolbar.set_show_close_button(
                 not App().settings.get_value("disable-csd"))
-        self.__vgrid.add(self.__main_stack)
+        self.__vgrid.add(self.__container)
         self.add(self.__vgrid)
-        self.__main_stack.add_named(self.__container, "main")
-        self.__main_stack.set_visible_child_name("main")
         self.drag_dest_set(Gtk.DestDefaults.DROP | Gtk.DestDefaults.MOTION,
                            [], Gdk.DragAction.MOVE)
-        self.drag_dest_add_text_targets()
+        self.drag_dest_add_uri_targets()
         self.connect("drag-data-received", self.__on_drag_data_received)
-        self.connect("drag-leave", self.__on_drag_leave)
+
+    def __handle_miniplayer(self, width, height):
+        """
+            Handle mini player show/hide
+            @param width as int
+            @param height as int
+        """
+        if width < Sizing.MONSTER:
+            self.__show_miniplayer(True)
+            self.__miniplayer.set_vexpand(False)
+            self.__container.stack.show()
+            if self.__miniplayer is not None:
+                self.__miniplayer.set_vexpand(False)
+        else:
+            self.__show_miniplayer(False)
+            self.__container.stack.show()
+            if self.__miniplayer is not None:
+                self.__miniplayer.set_vexpand(False)
+        if height < Sizing.MEDIUM and\
+                self.__miniplayer is not None and\
+                self.__miniplayer.is_visible():
+            self.__container.stack.hide()
+            self.__miniplayer.set_vexpand(True)
+        elif self.__miniplayer is not None:
+            self.__container.stack.show()
+            self.__miniplayer.set_vexpand(False)
 
     def __on_drag_data_received(self, widget, context, x, y, data, info, time):
         """
@@ -388,25 +351,27 @@ class Window(Gtk.ApplicationWindow):
                 if parsed.scheme in ["file", "sftp", "smb", "webdav"]:
                     uris.append(uri)
             if uris:
-                task_helper = TaskHelper()
-                task_helper.run(importer.add, uris,
-                                callback=(App().scanner.update,))
+                App().task_helper.run(importer.add, uris,
+                                      callback=(App().scanner.update,))
         except:
             pass
 
-    def __on_drag_leave(self, widget, context, time):
+    def __on_map(self, window):
         """
-            Remove style
-            @param widget as Gtk.Widget
-            @param context as Gdk.DragContext
-            @param time as int
+            Connect signals
+            @param window as Window
         """
-        self.__main_stack.set_visible_child_name("main")
+        if self.__signal1 is None:
+            self.__signal1 = self.connect("window-state-event",
+                                          self.__on_window_state_event)
+        if self.__signal2 is None:
+            self.__signal2 = self.connect("configure-event",
+                                          self.__on_configure_event)
 
-    def __on_hide(self, window):
+    def __on_unmap(self, window):
         """
-            Remove callbacks we don"t want to save an invalid value on hide
-            @param window as GtkApplicationWindow
+            Disconnect signals
+            @param window as Window
         """
         if self.__signal1 is not None:
             self.disconnect(self.__signal1)
@@ -415,21 +380,23 @@ class Window(Gtk.ApplicationWindow):
             self.disconnect(self.__signal2)
             self.__signal2 = None
 
-    def __on_configure_event(self, widget, event):
+    def __on_configure_event(self, window, event):
         """
-            Delay event
-            @param: widget as Gtk.Window
-            @param: event as Gdk.Event
+            Handle configure event
+            @param window as Gtk.Window
+            @param event as Gdk.Event
         """
+        (width, height) = window.get_size()
+        self.__handle_miniplayer(width, height)
+        self.__toolbar.set_content_width(width)
         if self.__timeout_configure:
             GLib.source_remove(self.__timeout_configure)
             self.__timeout_configure = None
-        self.responsive_design()
         if not self.is_maximized():
             self.__timeout_configure = GLib.timeout_add(
                 1000,
                 self.__save_size_position,
-                widget)
+                window)
 
     def __save_size_position(self, widget):
         """
@@ -437,32 +404,16 @@ class Window(Gtk.ApplicationWindow):
             @param: widget as Gtk.Window
         """
         self.__timeout_configure = None
-        size = widget.get_size()
-        if self.__main_stack.is_visible():
-            name = "window"
-        else:
-            name = "mini"
+        (width, height) = widget.get_size()
         if self.__miniplayer is not None:
-            self.__miniplayer.update_cover(size[0])
-        App().settings.set_value("%s-size" % name,
-                                 GLib.Variant("ai", [size[0], size[1]]))
-
-        position = widget.get_position()
-        App().settings.set_value("%s-position" % name,
-                                 GLib.Variant("ai",
-                                              [position[0], position[1]]))
-
-    def __connect_state_signals(self):
-        """
-            Connect state signals
-        """
-        self.responsive_design()
-        if self.__signal1 is None:
-            self.__signal1 = self.connect("window-state-event",
-                                          self.__on_window_state_event)
-        if self.__signal2 is None:
-            self.__signal2 = self.connect("configure-event",
-                                          self.__on_configure_event)
+            self.__miniplayer.update_cover(width)
+        # Keep a minimal height
+        if height < Sizing.MEDIUM:
+            height = Sizing.MEDIUM
+        App().settings.set_value("window-size",
+                                 GLib.Variant("ai", [width, height]))
+        (x, y) = widget.get_position()
+        App().settings.set_value("window-position", GLib.Variant("ai", [x, y]))
 
     def __on_window_state_event(self, widget, event):
         """
@@ -475,16 +426,6 @@ class Window(Gtk.ApplicationWindow):
            event.new_window_state & Gdk.WindowState.FOCUSED:
             # FIXME Remove this, handled by MPRIS in GNOME 3.26
             self.__grab_media_keys()
-
-    def __on_destroyed_window(self, widget):
-        """
-            Save paned widget width
-            @param widget as unused, data as unused
-        """
-        if self.__was_maximized and\
-           self.__main_stack.get_visible_child_name() == "mini":
-            App().settings.set_boolean("window-maximized", True)
-        self.__container.save_internals()
 
     def __on_seek_action(self, action, param):
         """
@@ -535,12 +476,18 @@ class Window(Gtk.ApplicationWindow):
             if self.container.view is not None:
                 self.container.view.enable_filter()
         elif string == "volume":
-            self.__toolbar.title.show_hide_volume_control()
+            if self.__miniplayer is None:
+                self.__toolbar.title.show_hide_volume_control()
+            else:
+                self.__miniplayer.show_hide_volume_control()
         elif string == "current_artist":
             if App().player.current_track.id is not None and\
                     App().player.current_track.id > 0:
                 artist_ids = App().player.current_track.album.artist_ids
-                self.container.show_artists_albums(artist_ids)
+                if App().settings.get_value("show-sidebar"):
+                    self.container.show_artists_albums(artist_ids)
+                else:
+                    App().window.container.show_view(artist_ids[0])
         elif string == "show_genres":
             state = not App().settings.get_value("show-genres")
             App().settings.set_value("show-genres",
@@ -549,10 +496,16 @@ class Window(Gtk.ApplicationWindow):
         elif string == "loved":
             track = App().player.current_track
             if track.id is not None and track.id >= 0:
-                track.set_loved(not track.loved)
+                if track.loved < 1:
+                    loved = track.loved + 1
+                else:
+                    loved = Type.NONE
+                track.set_loved(loved)
                 if App().notify is not None:
-                    if track.loved:
+                    if track.loved == 1:
                         heart = "❤"
+                    elif track.loved == -1:
+                        heart = "⏭"
                     else:
                         heart = "♡"
                     App().notify.send("%s - %s: %s" %
@@ -565,16 +518,14 @@ class Window(Gtk.ApplicationWindow):
             Run scanner on realize
             @param widget as Gtk.Widget
         """
-        self.setup_window()
+        self.setup()
         if App().settings.get_value("auto-update") or App().tracks.is_empty():
             # Delayed, make python segfault on sys.exit() otherwise
             # No idea why, maybe scanner using Gstpbutils before Gstreamer
             # initialisation is finished...
             GLib.timeout_add(2000, App().scanner.update)
-        # We delay update_list_one() to be sure inital stacked mode is set
-        GLib.timeout_add(200, self.__container.update_list_one)
         # Here we ignore initial configure events
-        GLib.timeout_add(200, self.__connect_state_signals)
+        self.__toolbar.set_content_width(self.get_size()[0])
 
     def __on_current_changed(self, player):
         """
@@ -586,3 +537,25 @@ class Window(Gtk.ApplicationWindow):
         else:
             artists = ", ".join(player.current_track.artists)
             self.set_title("%s - %s" % (artists, "Lollypop"))
+
+    def __on_adaptive_changed(self, window, adaptive_stack):
+        """
+            Handle adaptive mode
+            @param window as AdaptiveWindow
+            @param adaptive_stack as bool
+        """
+        if adaptive_stack:
+            self.__container.show_sidebar(True)
+            self.__toolbar.end.set_mini(True)
+            self.__container.list_one.add_value((Type.SEARCH,
+                                                _("Search"),
+                                                _("Search")))
+            self.__container.list_one.add_value((Type.CURRENT,
+                                                _("Current playlist"),
+                                                _("Current playlist")))
+        else:
+            value = App().settings.get_value("show-sidebar")
+            self.__toolbar.end.set_mini(False)
+            self.__container.show_sidebar(value)
+            self.__container.list_one.remove_value(Type.CURRENT)
+            self.__container.list_one.remove_value(Type.SEARCH)

@@ -13,7 +13,7 @@
 from gi.repository import Gio, GLib, GdkPixbuf
 
 from lollypop.utils import escape
-from lollypop.define import ArtSize, App
+from lollypop.define import App
 from lollypop.logger import Logger
 
 
@@ -56,17 +56,18 @@ class InformationStore:
         """
         filepath = "%s/%s.jpg" % (InformationStore._INFO_PATH,
                                   escape(artist))
-        InformationStore.migrate_store(artist, filepath)
         return GLib.file_test(filepath, GLib.FileTest.EXISTS)
 
-    def get_artwork_path(artist, size):
+    def get_artwork_path(artist, size, scale_factor):
         """
             Return path for artwork
             @param artist as string
             @param size as int
+            @param scale_factor as int
             @return path as string/None
         """
         try:
+            size *= scale_factor
             extract = None
             filepath = "%s/%s.jpg" % (
                 InformationStore._INFO_PATH,
@@ -75,7 +76,6 @@ class InformationStore:
                 InformationStore._CACHE_PATH,
                 escape(artist),
                 size)
-            InformationStore.migrate_store(artist, filepath)
             f = Gio.File.new_for_path(filepath)
             if not f.query_exists():
                 return None
@@ -143,29 +143,6 @@ class InformationStore:
                                   escape(artist))
         content = None
         f = Gio.File.new_for_path(filepath)
-        ###################################################################
-        # Migration code from lollypop <= 0.9.403
-        if not f.query_exists():
-            for suffix in ["lastfm", "spotify", "deezer", "wikipedia"]:
-                suffix_filepath = "%s/%s_%s.txt" % (
-                    InformationStore._INFO_PATH,
-                    escape(artist),
-                    suffix)
-                suffix_f = Gio.File.new_for_path(suffix_filepath)
-                if suffix_f.query_exists():
-                    info = suffix_f.query_info(
-                        "standard::size",
-                        Gio.FileQueryInfoFlags.NONE)
-                    if info.get_size() == 0:
-                        continue
-                    suffix_f.move(
-                        f,
-                        Gio.FileCopyFlags.OVERWRITE,
-                        None,
-                        None)
-                    break
-        #
-        ###################################################################
         if f.query_exists():
             (status, content, tag) = f.load_contents()
         return content
@@ -185,16 +162,9 @@ class InformationStore:
         else:
             bytes = GLib.Bytes(data)
             stream = Gio.MemoryInputStream.new_from_bytes(bytes)
-            bytes.unref()
-            pixbuf = GdkPixbuf.Pixbuf.new_from_stream_at_scale(stream,
-                                                               ArtSize.ARTIST,
-                                                               -1,
-                                                               True,
-                                                               None)
+            pixbuf = GdkPixbuf.Pixbuf.new_from_stream(stream, None)
             stream.close()
-            pixbuf.savev(filepath,
-                         "jpeg", ["quality"], [str(App().settings.get_value(
-                                               "cover-quality").get_int32())])
+            pixbuf.savev(filepath, "jpeg", ["quality"], ["100"])
 
     def add_artist_bio(artist, content):
         """
@@ -212,49 +182,15 @@ class InformationStore:
                 fstream.write(content, None)
                 fstream.close()
 
-    def uncache_artwork(artist, scale):
+    def uncache_artwork(artist):
         """
             Remove artwork from cache
             @param artist as str
-            @param scale factor as int
         """
-        # ArtistView::__set_artwork()
-        # InformationPopover::__set_artist_artwork()
-        for i in [1, 2, 3]:
-            filepath = "%s/%s_%s.jpg" % (InformationStore._CACHE_PATH,
-                                         escape(artist),
-                                         ArtSize.ARTIST_SMALL * scale * i)
-            f = Gio.File.new_for_path(filepath)
-            try:
-                if f.query_exists():
-                    f.delete(None)
-            except Exception as e:
-                Logger.error("InformationStore::uncache_artwork(): %s" % e)
-
-    def migrate_store(artist, filepath):
-        """
-            Migrate from old lollypop store
-            @param artist as str
-            @param filepath as str
-        """
-        # Migration code from lollypop <= 0.9.403
-        f = Gio.File.new_for_path(filepath)
-        if not f.query_exists():
-            for suffix in ["lastfm", "spotify", "deezer", "wikipedia"]:
-                suffix_filepath = "%s/%s_%s.jpg" % (
-                    InformationStore._INFO_PATH,
-                    escape(artist),
-                    suffix)
-                suffix_f = Gio.File.new_for_path(suffix_filepath)
-                if suffix_f.query_exists():
-                    info = suffix_f.query_info(
-                        "standard::size",
-                        Gio.FileQueryInfoFlags.NONE)
-                    if info.get_size() == 0:
-                        continue
-                    suffix_f.move(
-                        f,
-                        Gio.FileCopyFlags.OVERWRITE,
-                        None,
-                        None)
-                    break
+        try:
+            from pathlib import Path
+            search = "%s*.jpg" % escape(artist)
+            for p in Path(InformationStore._CACHE_PATH).glob(search):
+                p.unlink()
+        except Exception as e:
+            Logger.error("InformationStore::uncache_artwork(): %s" % e)

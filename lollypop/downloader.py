@@ -48,8 +48,7 @@ class Downloader:
         if get_network_available():
             self.__albums_queue.append(album_id)
             if not self.__in_albums_download:
-                helper = TaskHelper()
-                helper.run(self.__cache_albums_art)
+                App().task_helper.run(self.__cache_albums_art)
 
     def cache_artists_info(self):
         """
@@ -58,8 +57,7 @@ class Downloader:
         if self.__cache_artists_running:
             return
         self.__cache_artists_running = True
-        helper = TaskHelper()
-        helper.run(self.__cache_artists_artwork)
+        App().task_helper.run(self.__cache_artists_artwork)
 
     def get_google_search_uri(self, search):
         """
@@ -331,12 +329,14 @@ class Downloader:
                             InformationStore.add_artist_artwork(
                                 artist,
                                 data)
+                            artwork_set = True
                             Logger.debug("""Downloader::
                                          __cache_artists_info(): %s""" % uri)
                         else:
                             InformationStore.add_artist_artwork(
                                 artist,
                                 None)
+                        break
                 except Exception as e:
                     Logger.error("Downloader::__cache_artists_info(): %s, %s" %
                                  (e, artist))

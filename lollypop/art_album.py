@@ -10,23 +10,22 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-from gi.repository import GLib, Gdk, GdkPixbuf, Gio, Gst
+from gi.repository import GLib, GdkPixbuf, Gio, Gst
 
 import re
 
-from lollypop.art_base import BaseArt
 from lollypop.tagreader import TagReader
 from lollypop.define import App, ArtSize
 from lollypop.objects import Album
 from lollypop.logger import Logger
 from lollypop.utils import escape, is_readonly
-from lollypop.helper_dbus import DBusHelper
 from lollypop.helper_task import TaskHelper
 
 
-class AlbumArt(BaseArt, TagReader):
+class AlbumArt:
     """
          Manager album artwork
+         Should be inherited by a BaseArt
     """
 
     _MIMES = ("jpeg", "jpg", "png", "gif")
@@ -35,38 +34,34 @@ class AlbumArt(BaseArt, TagReader):
         """
             Init album art
         """
-        BaseArt.__init__(self)
-        TagReader.__init__(self)
         self.__favorite = App().settings.get_value(
             "favorite-cover").get_string()
         if not self.__favorite:
             self.__favorite = App().settings.get_default_value(
                 "favorite-cover").get_string()
 
-    def get_album_cache_path(self, album, size):
+    def get_album_cache_path(self, album, width, height):
         """
             get artwork cache path for album_id
             @param album as Album
-            @param size as int
+            @param width as int
+            @param height as int
             @return cover path as string or None if no cover
         """
         filename = ""
         try:
             filename = self.get_album_cache_name(album)
-            cache_path_jpg = "%s/%s_%s.jpg" % (self._CACHE_PATH,
-                                               filename,
-                                               size)
+            cache_path_jpg = "%s/%s_%s_%s.jpg" % (self._CACHE_PATH,
+                                                  filename,
+                                                  width,
+                                                  height)
             f = Gio.File.new_for_path(cache_path_jpg)
             if f.query_exists():
                 return cache_path_jpg
             else:
-                self.get_album_artwork(album, size, 1)
+                self.get_album_artwork(album, width, height, 1)
                 if f.query_exists():
                     return cache_path_jpg
-                else:
-                    return self._get_default_icon_path(
-                        size,
-                        "folder-music-symbolic")
         except Exception as e:
             print("Art::get_album_cache_path(): %s" % e, ascii(filename))
             return None
@@ -82,6 +77,7 @@ class AlbumArt(BaseArt, TagReader):
         """
         if album.id is None:
             return None
+        self.__update_album_uri(album)
         try:
             filename = self.get_album_cache_name(album) + ".jpg"
             uris = [
@@ -145,18 +141,22 @@ class AlbumArt(BaseArt, TagReader):
             print("AlbumArt::get_album_artworks()", e)
         return uris
 
-    def get_album_artwork(self, album, size, scale, disable_cache=False):
+    def get_album_artwork(self, album, width, height, scale, ratio=True):
         """
             Return a cairo surface for album_id, covers are cached as jpg.
             @param album as Album
-            @param pixbuf size as int
+            @param width as int
+            @param height as int
             @param scale factor as int
-            @param disable_cache as bool
+            @param ratio as bool
             @return cairo surface
+            @thread safe
         """
-        size *= scale
+        width *= scale
+        height *= scale
         filename = self.get_album_cache_name(album)
-        cache_path_jpg = "%s/%s_%s.jpg" % (self._CACHE_PATH, filename, size)
+        cache_path_jpg = "%s/%s_%s_%s.jpg" % (self._CACHE_PATH, filename,
+                                              width, height)
         pixbuf = None
 
         try:
@@ -164,8 +164,8 @@ class AlbumArt(BaseArt, TagReader):
             f = Gio.File.new_for_path(cache_path_jpg)
             if f.query_exists():
                 pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(cache_path_jpg,
-                                                                size,
-                                                                size)
+                                                                width,
+                                                                height)
             else:
                 # Use favorite folder artwork
                 if pixbuf is None:
@@ -174,22 +174,23 @@ class AlbumArt(BaseArt, TagReader):
                     if uri is not None:
                         f = Gio.File.new_for_uri(uri)
                         (status, data, tag) = f.load_contents(None)
-                        ratio = self._preserve_ratio(uri)
                         bytes = GLib.Bytes(data)
                         stream = Gio.MemoryInputStream.new_from_bytes(bytes)
-                        bytes.unref()
                         pixbuf = GdkPixbuf.Pixbuf.new_from_stream_at_scale(
                             stream,
-                            size,
-                            size,
+                            width,
+                            height,
                             ratio,
                             None)
+                        if ratio:
+                            pixbuf = self._preserve_ratio(
+                                pixbuf, width, height)
                         stream.close()
                 # Use tags artwork
                 if pixbuf is None and album.tracks:
                     try:
                         pixbuf = self.pixbuf_from_tags(
-                            album.tracks[0].uri, size)
+                            album.tracks[0].uri, width, height)
                     except Exception as e:
                         print("AlbumArt::get_album_artwork()", e)
 
@@ -200,50 +201,30 @@ class AlbumArt(BaseArt, TagReader):
                     if uri is not None:
                         f = Gio.File.new_for_uri(uri)
                         (status, data, tag) = f.load_contents(None)
-                        ratio = self._preserve_ratio(uri)
                         bytes = GLib.Bytes(data)
                         stream = Gio.MemoryInputStream.new_from_bytes(bytes)
-                        bytes.unref()
                         pixbuf = GdkPixbuf.Pixbuf.new_from_stream_at_scale(
                             stream,
-                            size,
-                            size,
+                            width,
+                            height,
                             ratio,
                             None)
                         stream.close()
-                # Use default artwork
+                        if ratio:
+                            pixbuf = self._preserve_ratio(
+                                pixbuf, width, height)
+                # Search on the web
                 if pixbuf is None:
                     self.cache_album_art(album.id)
-                    return self.get_default_icon("folder-music-symbolic",
-                                                 size,
-                                                 scale)
-                elif not disable_cache:
+                else:
                     pixbuf.savev(cache_path_jpg, "jpeg", ["quality"],
                                  [str(App().settings.get_value(
                                      "cover-quality").get_int32())])
-            surface = Gdk.cairo_surface_create_from_pixbuf(pixbuf, scale, None)
-            return surface
+            return pixbuf
 
         except Exception as e:
             Logger.error("AlbumArt::get_album_artwork(): %s" % e)
-            return self.get_default_icon("folder-music-symbolic", size, scale)
-
-    def get_album_artwork2(self, uri, size, scale):
-        """
-            Return a cairo surface with borders for uri
-            No cache usage
-            @param uri as string
-            @param size as int
-            @param scale as int
-            @return cairo surface
-        """
-        size *= scale
-        pixbuf = self.pixbuf_from_tags(uri, size)
-        if pixbuf is not None:
-            surface = Gdk.cairo_surface_create_from_pixbuf(pixbuf, scale, None)
-            return surface
-        else:
-            return self.get_default_icon("folder-music-symbolic", size, scale)
+            return None
 
     def save_album_artwork(self, data, album_id):
         """
@@ -259,7 +240,7 @@ class AlbumArt(BaseArt, TagReader):
             filename = self.get_album_cache_name(album) + ".jpg"
             if save_to_tags:
                 helper = TaskHelper()
-                helper.run(self.__save_artwork_tags, data, album)
+                helper.run(self.__save_artwork_to_tags, data, album)
 
             store_path = self._STORE_PATH + "/" + filename
             if album.uri == "" or is_readonly(album.uri):
@@ -278,13 +259,7 @@ class AlbumArt(BaseArt, TagReader):
             if not save_to_tags or dst.query_exists():
                 bytes = GLib.Bytes(data)
                 stream = Gio.MemoryInputStream.new_from_bytes(bytes)
-                bytes.unref()
-                pixbuf = GdkPixbuf.Pixbuf.new_from_stream_at_scale(
-                    stream,
-                    ArtSize.MONSTER,
-                    ArtSize.MONSTER,
-                    True,
-                    None)
+                pixbuf = GdkPixbuf.Pixbuf.new_from_stream(stream, None)
                 stream.close()
                 pixbuf.savev(store_path, "jpeg", ["quality"],
                              [str(App().settings.get_value(
@@ -319,9 +294,7 @@ class AlbumArt(BaseArt, TagReader):
                     f.delete(None)
                 except Exception as e:
                     Logger.error("AlbumArt::remove_album_artwork(): %s" % e)
-        dbus_helper = DBusHelper()
-        dbus_helper.call("CanSetCover", None,
-                         self.__on_remove_album_artwork, album.id)
+        self.__write_image_to_tags("", album.id)
 
     def clean_album_cache(self, album):
         """
@@ -343,21 +316,22 @@ class AlbumArt(BaseArt, TagReader):
         except Exception as e:
             Logger.error("AlbumArt::clean_album_cache(): %s" % e)
 
-    def pixbuf_from_tags(self, uri, size):
+    def pixbuf_from_tags(self, uri, width, height):
         """
             Return cover from tags
             @param uri as str
-            @param size as int
+            @param width as int
+            @param height as int
         """
         pixbuf = None
         if uri.startswith("http:") or uri.startswith("https:"):
             return
         try:
-            info = self.get_info(uri)
+            tag_reader = TagReader()
+            info = tag_reader.get_info(uri)
             exist = False
             if info is not None:
                 (exist, sample) = info.get_tags().get_sample_index("image", 0)
-                # Some file store it in a preview-image tag
                 if not exist:
                     (exist, sample) = info.get_tags().get_sample_index(
                         "preview-image", 0)
@@ -366,10 +340,9 @@ class AlbumArt(BaseArt, TagReader):
             if exist:
                 bytes = GLib.Bytes(mapflags.data)
                 stream = Gio.MemoryInputStream.new_from_bytes(bytes)
-                bytes.unref()
                 pixbuf = GdkPixbuf.Pixbuf.new_from_stream_at_scale(stream,
-                                                                   size,
-                                                                   size,
+                                                                   width,
+                                                                   height,
                                                                    False,
                                                                    None)
                 stream.close()
@@ -390,16 +363,29 @@ class AlbumArt(BaseArt, TagReader):
 #######################
 # PRIVATE             #
 #######################
-    def __save_artwork_tags(self, data, album):
+    def __update_album_uri(self, album):
         """
-            Save artwork in tags
+            Check if album uri exists, update if not
+            @param album as Album
+        """
+        d = Gio.File.new_for_uri(album.uri)
+        if not d.query_exists():
+            if album.tracks:
+                track_uri = album.tracks[0].uri
+                f = Gio.File.new_for_uri(track_uri)
+                p = f.get_parent()
+                parent_uri = "/" if p is None else p.get_uri()
+                album.set_uri(parent_uri)
+
+    def __save_artwork_to_tags(self, data, album):
+        """
+            Save artwork to tags
             @param data as bytes
             @param album as Album
         """
         # https://bugzilla.gnome.org/show_bug.cgi?id=747431
         bytes = GLib.Bytes(data)
         stream = Gio.MemoryInputStream.new_from_bytes(bytes)
-        bytes.unref()
         pixbuf = GdkPixbuf.Pixbuf.new_from_stream_at_scale(stream,
                                                            ArtSize.MONSTER,
                                                            ArtSize.MONSTER,
@@ -409,67 +395,40 @@ class AlbumArt(BaseArt, TagReader):
         pixbuf.savev("%s/lollypop_cover_tags.jpg" % self._CACHE_PATH,
                      "jpeg", ["quality"], [str(App().settings.get_value(
                                            "cover-quality").get_int32())])
-        f = Gio.File.new_for_path("%s/lollypop_cover_tags.jpg" %
-                                  self._CACHE_PATH)
-        if f.query_exists():
-            dbus_helper = DBusHelper()
-            dbus_helper.call("CanSetCover", None,
-                             self.__on_save_artwork_tags, album.id)
+        self.__write_image_to_tags("%s/lollypop_cover_tags.jpg" %
+                                   self._CACHE_PATH, album.id)
 
-    def __on_save_artwork_tags(self, source, result, album_id):
+    def __write_image_to_tags(self, path, album_id):
         """
-            Save image to tags
-            @param source as GObject.Object
-            @param result as Gio.AsyncResult
+            Save album at path to album tags
+            @param path as str
             @param album_id as int
         """
-        try:
-            can_set_cover = source.call_finish(result)[0]
-        except:
-            can_set_cover = False
-        if can_set_cover:
-            dbus_helper = DBusHelper()
-            for uri in App().albums.get_track_uris(album_id, [], []):
+        if self.kid3_available:
+            files = []
+            for uri in App().albums.get_track_uris(album_id):
                 try:
-                    path = GLib.filename_from_uri(uri)[0]
+                    files.append(GLib.filename_from_uri(uri)[0])
                 except:
-                    continue
-                dbus_helper.call("SetCover",
-                                 GLib.Variant(
-                                     "(ss)",
-                                     (path,
-                                      "%s/lollypop_cover_tags.jpg" %
-                                      self._CACHE_PATH)), None, None)
+                    pass
+            cover = "%s/lollypop_cover_tags.jpg" % self._CACHE_PATH
+            if GLib.find_program_in_path("flatpak-spawn") is not None:
+                argv = ["flatpak-spawn", "--host", "kid3-cli",
+                        "-c", "set picture:'%s' ''" % cover]
+            else:
+                argv = ["kid3-cli", "-c", "set picture:'%s' ''" % cover]
+            argv += files
+            try:
+                (pid, stdin, stdout, stderr) = GLib.spawn_async(
+                    argv, flags=GLib.SpawnFlags.SEARCH_PATH |
+                    GLib.SpawnFlags.STDOUT_TO_DEV_NULL,
+                    standard_input=False,
+                    standard_output=False,
+                    standard_error=False
+                )
+            except Exception as e:
+                Logger.error("AlbumArt::__on_kid3_result(): %s" % e)
             self.clean_album_cache(Album(album_id))
             # FIXME Should be better to send all covers at once and listen
             # to as signal but it works like this
             GLib.timeout_add(2000, self.album_artwork_update, album_id)
-        else:
-            # Lollypop-portal or kid3-cli removed?
-            App().settings.set_value("save-to-tags", GLib.Variant("b", False))
-
-    def __on_remove_album_artwork(self, source, result, album_id):
-        """
-            Remove album image from tags
-            @param source as GObject.Object
-            @param result as Gio.AsyncResult
-            @param album_id
-        """
-        try:
-            can_set_cover = source.call_finish(result)
-        except:
-            can_set_cover = False
-        if can_set_cover:
-            dbus_helper = DBusHelper()
-            for uri in App().albums.get_track_uris(album_id, [], []):
-                try:
-                    path = GLib.filename_from_uri(uri)[0]
-                    dbus_helper.call("SetCover",
-                                     GLib.Variant("(ss)", (path, "")),
-                                     None, None)
-                except Exception as e:
-                    Logger.error("AlbumArt::__on_remove_album_artwork(): %s" %
-                                 e)
-        else:
-            # Lollypop-portal or kid3-cli removed?
-            App().settings.set_value("save-to-tags", GLib.Variant("b", False))

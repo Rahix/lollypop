@@ -16,9 +16,8 @@ from gettext import gettext as _
 
 from lollypop.radios import Radios
 from lollypop.logger import Logger
-from lollypop.define import App, ArtSize, WindowSize
+from lollypop.define import App, ArtSize, Sizing
 from lollypop.art import Art
-from lollypop.utils import get_network_available
 from lollypop.list import LinkedList
 from lollypop.objects import Track
 from lollypop.helper_task import TaskHelper
@@ -35,17 +34,17 @@ class TuneinPopover(Gtk.Popover):
         Popover showing tunin radios
     """
 
-    def __init__(self, radios_manager=None):
+    def __init__(self, radios=None):
         """
             Init Popover
-            @param radios_manager as Radios
+            @param radios as Radios
         """
         Gtk.Popover.__init__(self)
         self.__cancellable = Gio.Cancellable()
-        if radios_manager is not None:
-            self.__radios_manager = radios_manager
+        if radios is not None:
+            self.__radios = radios
         else:
-            self.__radios_manager = Radios()
+            self.__radios = Radios()
         self.__timeout_id = None
         self.__history = None
         self.__covers_to_download = []
@@ -86,23 +85,15 @@ class TuneinPopover(Gtk.Popover):
 
     def populate(self, uri="http://opml.radiotime.com/Browse.ashx?c="):
         """
-            Populate views
+            Populate view for uri
             @param uri as str
         """
-        if not get_network_available():
+        if not Gio.NetworkMonitor.get_default().get_network_available():
             self.__show_not_found(_("Can't connect to TuneIn…"))
             return
-        self.__spinner.start()
-        self.__clear()
-        self.__stack.set_visible_child_name("spinner")
-        self.__back_btn.set_sensitive(False)
-        self.__home_btn.set_sensitive(False)
-        self.__label.set_text(_("Please wait…"))
-        helper = TaskHelper()
-        helper.load_uri_content(uri,
-                                self.__cancellable,
-                                self.__on_uri_content)
-        self.__cancellable.reset()
+        if self.__view.get_children():
+            return
+        self.__populate(uri)
 
 #######################
 # PROTECTED           #
@@ -118,7 +109,7 @@ class TuneinPopover(Gtk.Popover):
         self.__stack.set_visible_child_name("spinner")
         self.__spinner.start()
         self.__clear()
-        self.populate(self.__history.value)
+        self.__populate(self.__history.value)
         if self.__history.prev is None:
             self.__back_btn.set_sensitive(False)
 
@@ -128,7 +119,7 @@ class TuneinPopover(Gtk.Popover):
             @param btn as Gtk.Button
         """
         self.__history = None
-        self.populate()
+        self.__populate()
 
     def _on_search_changed(self, widget):
         """
@@ -149,11 +140,28 @@ class TuneinPopover(Gtk.Popover):
                                                  text)
         else:
             self.__history = None
-            self.populate()
+            self.__populate()
 
 #######################
 # PRIVATE             #
 #######################
+    def __populate(self, uri="http://opml.radiotime.com/Browse.ashx?c="):
+        """
+            Populate view for uri
+            @param uri as str
+        """
+        self.__clear()
+        self.__spinner.start()
+        self.__stack.set_visible_child_name("spinner")
+        self.__back_btn.set_sensitive(False)
+        self.__home_btn.set_sensitive(False)
+        self.__label.set_text(_("Please wait…"))
+        helper = TaskHelper()
+        helper.load_uri_content(uri,
+                                self.__cancellable,
+                                self.__on_uri_content)
+        self.__cancellable.reset()
+
     def __show_not_found(self, message=""):
         """
             Show not found message
@@ -274,7 +282,6 @@ class TuneinPopover(Gtk.Popover):
             bytes = GLib.Bytes(content)
             stream = Gio.MemoryInputStream.new_from_bytes(bytes)
             pixbuf = GdkPixbuf.Pixbuf.new_from_stream(stream, None)
-            bytes.unref()
             stream.close()
             pixbuf.savev(cache_path_png, "png", [None], [None])
             App().art.emit("radio-artwork-changed", name)
@@ -306,7 +313,7 @@ class TuneinPopover(Gtk.Popover):
         """
         if status and content:
             uri = content.decode("utf-8").split("\n")[0]
-        self.__radios_manager.add(name.replace("/", "-"), uri)
+        self.__radios.add(name.replace("/", "-"), uri)
 
     def __on_image_downloaded(self, uri, status, content, image):
         """
@@ -319,7 +326,6 @@ class TuneinPopover(Gtk.Popover):
         if status:
             bytes = GLib.Bytes(content)
             stream = Gio.MemoryInputStream.new_from_bytes(bytes)
-            bytes.unref()
             if stream is not None:
                 pixbuf = GdkPixbuf.Pixbuf.new_from_stream_at_scale(
                     stream,
@@ -342,20 +348,19 @@ class TuneinPopover(Gtk.Popover):
         """
         if item.TYPE == "link":
             self.__scrolled.get_vadjustment().set_value(0.0)
-            self.populate(item.URL)
+            self.__populate(item.URL)
         elif item.TYPE == "audio":
-            if get_network_available():
-                helper = TaskHelper()
+            if Gio.NetworkMonitor.get_default().get_network_available():
                 # Cache for toolbar
-                helper.run(App().art.copy_uri_to_cache,
-                           item.LOGO, item.TEXT,
-                           App().window.toolbar.info.artsize)
+                App().task_helper.run(App().art.copy_uri_to_cache,
+                                      item.LOGO, item.TEXT,
+                                      App().window.toolbar.info.art_size)
                 # Cache for MPRIS
-                helper.run(App().art.copy_uri_to_cache,
-                           item.LOGO, item.TEXT, ArtSize.BIG)
+                App().task_helper.run(App().art.copy_uri_to_cache,
+                                      item.LOGO, item.TEXT, ArtSize.BIG)
                 # Cache for miniplayer
-                helper.run(App().art.copy_uri_to_cache,
-                           item.LOGO, item.TEXT, WindowSize.SMALL)
+                App().task_helper.run(App().art.copy_uri_to_cache,
+                                      item.LOGO, item.TEXT, Sizing.SMALL)
             track = Track()
             track.set_radio(item.TEXT, item.URL)
             App().player.load(track)
@@ -418,4 +423,4 @@ class TuneinPopover(Gtk.Popover):
         self.__timeout_id = None
         uri = "http://opml.radiotime.com/Search.ashx?query=%s" %\
             GLib.uri_escape_string(string, "/", False)
-        self.populate(uri)
+        self.__populate(uri)

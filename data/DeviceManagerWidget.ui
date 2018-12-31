@@ -10,6 +10,7 @@
   <object class="GtkGrid" id="widget">
     <property name="visible">True</property>
     <property name="can_focus">False</property>
+    <property name="halign">center</property>
     <property name="margin_top">5</property>
     <property name="margin_bottom">5</property>
     <property name="hexpand">True</property>
@@ -17,104 +18,46 @@
     <property name="row_spacing">5</property>
     <property name="column_spacing">5</property>
     <child>
-      <object class="GtkInfoBar" id="infobar">
-        <property name="app_paintable">True</property>
-        <property name="can_focus">False</property>
-        <property name="hexpand">True</property>
-        <property name="message_type">error</property>
-        <property name="show_close_button">True</property>
-        <signal name="response" handler="_on_response" swapped="no"/>
-        <child internal-child="action_area">
-          <object class="GtkButtonBox" id="infobar-action_area1">
-            <property name="can_focus">False</property>
-            <property name="spacing">6</property>
-            <property name="layout_style">end</property>
-            <child>
-              <placeholder/>
-            </child>
-            <child>
-              <placeholder/>
-            </child>
-            <child>
-              <placeholder/>
-            </child>
-          </object>
-          <packing>
-            <property name="expand">False</property>
-            <property name="fill">False</property>
-            <property name="position">0</property>
-          </packing>
-        </child>
-        <child internal-child="content_area">
-          <object class="GtkBox" id="infobar-content_area1">
-            <property name="can_focus">False</property>
-            <property name="spacing">16</property>
-            <child>
-              <object class="GtkLabel" id="error-label">
-                <property name="visible">True</property>
-                <property name="can_focus">False</property>
-                <property name="margin_start">10</property>
-              </object>
-              <packing>
-                <property name="expand">False</property>
-                <property name="fill">True</property>
-                <property name="position">0</property>
-              </packing>
-            </child>
-          </object>
-          <packing>
-            <property name="expand">False</property>
-            <property name="fill">False</property>
-            <property name="position">0</property>
-          </packing>
-        </child>
-      </object>
-      <packing>
-        <property name="left_attach">0</property>
-        <property name="top_attach">0</property>
-        <property name="width">5</property>
-      </packing>
-    </child>
-    <child>
-      <object class="GtkScrolledWindow" id="scrolledwindow1">
+      <object class="GtkOverlay">
         <property name="visible">True</property>
-        <property name="can_focus">True</property>
-        <property name="shadow_type">in</property>
+        <property name="can_focus">False</property>
         <child>
-          <object class="GtkTreeView" id="view">
+          <object class="GtkScrolledWindow" id="scrolledwindow1">
             <property name="visible">True</property>
             <property name="can_focus">True</property>
-            <property name="hexpand">True</property>
-            <property name="vexpand">True</property>
-            <property name="enable_search">False</property>
-            <property name="search_column">1</property>
-            <property name="show_expanders">False</property>
-            <property name="activate_on_single_click">True</property>
-            <child internal-child="selection">
-              <object class="GtkTreeSelection" id="treeview-selection1">
-                <property name="mode">none</property>
+            <child>
+              <object class="GtkTreeView" id="view">
+                <property name="visible">True</property>
+                <property name="can_focus">True</property>
+                <property name="hexpand">True</property>
+                <property name="vexpand">True</property>
+                <property name="enable_search">False</property>
+                <property name="search_column">1</property>
+                <property name="show_expanders">False</property>
+                <property name="activate_on_single_click">True</property>
+                <child internal-child="selection">
+                  <object class="GtkTreeSelection">
+                    <property name="mode">none</property>
+                  </object>
+                </child>
+                <style>
+                  <class name="invisible-widget"/>
+                </style>
               </object>
             </child>
           </object>
+          <packing>
+            <property name="index">-1</property>
+          </packing>
         </child>
-      </object>
-      <packing>
-        <property name="left_attach">2</property>
-        <property name="top_attach">1</property>
-        <property name="width">2</property>
-      </packing>
-    </child>
-    <child>
-      <object class="GtkGrid" id="grid2">
-        <property name="visible">True</property>
-        <property name="can_focus">False</property>
-        <property name="hexpand">True</property>
-        <child>
+        <child type="overlay">
           <object class="GtkButton" id="menu">
             <property name="visible">True</property>
             <property name="can_focus">True</property>
             <property name="receives_default">True</property>
             <property name="halign">end</property>
+            <property name="valign">start</property>
+            <property name="margin_right">10</property>
             <property name="margin_end">10</property>
             <property name="hexpand">True</property>
             <property name="image">image1</property>
@@ -122,65 +65,15 @@
             <signal name="clicked" handler="_pop_menu" swapped="no"/>
             <style>
               <class name="menu-button"/>
+              <class name="menu-button-no-border"/>
             </style>
           </object>
-          <packing>
-            <property name="left_attach">2</property>
-            <property name="top_attach">0</property>
-          </packing>
-        </child>
-        <child>
-          <placeholder/>
-        </child>
-        <child>
-          <placeholder/>
-        </child>
-      </object>
-      <packing>
-        <property name="left_attach">4</property>
-        <property name="top_attach">1</property>
-      </packing>
-    </child>
-    <child>
-      <object class="GtkGrid" id="grid1">
-        <property name="visible">True</property>
-        <property name="can_focus">False</property>
-        <property name="hexpand">True</property>
-        <child>
-          <placeholder/>
-        </child>
-        <child>
-          <placeholder/>
-        </child>
-        <child>
-          <placeholder/>
-        </child>
-        <child>
-          <placeholder/>
-        </child>
-        <child>
-          <placeholder/>
-        </child>
-        <child>
-          <placeholder/>
-        </child>
-        <child>
-          <placeholder/>
-        </child>
-        <child>
-          <placeholder/>
-        </child>
-        <child>
-          <placeholder/>
         </child>
       </object>
       <packing>
         <property name="left_attach">0</property>
-        <property name="top_attach">1</property>
+        <property name="top_attach">0</property>
       </packing>
-    </child>
-    <child>
-      <placeholder/>
     </child>
   </object>
   <object class="GtkGrid" id="menu-items">
@@ -194,29 +87,6 @@
     <property name="column_spacing">5</property>
     <property name="column_homogeneous">True</property>
     <child>
-      <object class="GtkLabel" id="label1">
-        <property name="visible">True</property>
-        <property name="can_focus">False</property>
-        <property name="halign">start</property>
-        <property name="label" translatable="yes">Albums</property>
-      </object>
-      <packing>
-        <property name="left_attach">0</property>
-        <property name="top_attach">0</property>
-      </packing>
-    </child>
-    <child>
-      <object class="GtkSwitch" id="switch_albums">
-        <property name="visible">True</property>
-        <property name="can_focus">True</property>
-        <property name="halign">start</property>
-      </object>
-      <packing>
-        <property name="left_attach">1</property>
-        <property name="top_attach">0</property>
-      </packing>
-    </child>
-    <child>
       <object class="GtkLabel" id="label2">
         <property name="visible">True</property>
         <property name="can_focus">False</property>
@@ -225,7 +95,7 @@
       </object>
       <packing>
         <property name="left_attach">0</property>
-        <property name="top_attach">1</property>
+        <property name="top_attach">0</property>
       </packing>
     </child>
     <child>
@@ -237,7 +107,7 @@
       </object>
       <packing>
         <property name="left_attach">0</property>
-        <property name="top_attach">7</property>
+        <property name="top_attach">6</property>
       </packing>
     </child>
     <child>
@@ -249,7 +119,7 @@
       </object>
       <packing>
         <property name="left_attach">1</property>
-        <property name="top_attach">7</property>
+        <property name="top_attach">6</property>
       </packing>
     </child>
     <child>
@@ -266,7 +136,7 @@
       </object>
       <packing>
         <property name="left_attach">0</property>
-        <property name="top_attach">2</property>
+        <property name="top_attach">1</property>
         <property name="width">2</property>
       </packing>
     </child>
@@ -285,7 +155,7 @@
       </object>
       <packing>
         <property name="left_attach">0</property>
-        <property name="top_attach">3</property>
+        <property name="top_attach">2</property>
         <property name="width">2</property>
       </packing>
     </child>
@@ -304,7 +174,7 @@
       </object>
       <packing>
         <property name="left_attach">0</property>
-        <property name="top_attach">4</property>
+        <property name="top_attach">3</property>
         <property name="width">2</property>
       </packing>
     </child>
@@ -323,7 +193,7 @@
       </object>
       <packing>
         <property name="left_attach">0</property>
-        <property name="top_attach">5</property>
+        <property name="top_attach">4</property>
         <property name="width">2</property>
       </packing>
     </child>
@@ -342,7 +212,7 @@
       </object>
       <packing>
         <property name="left_attach">0</property>
-        <property name="top_attach">6</property>
+        <property name="top_attach">5</property>
         <property name="width">2</property>
       </packing>
     </child>

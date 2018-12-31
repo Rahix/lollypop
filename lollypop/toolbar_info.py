@@ -12,11 +12,16 @@
 
 from gi.repository import Gtk, Gdk, GLib
 
-from lollypop.controllers import InfoController
+from gettext import gettext as _
+
+from lollypop.logger import Logger
+from lollypop.widgets_utils import Popover
+from lollypop.helper_art import ArtHelperEffect
+from lollypop.controller_information import InformationController
 from lollypop.define import App, Type
 
 
-class ToolbarInfo(Gtk.Bin, InfoController):
+class ToolbarInfo(Gtk.Bin, InformationController):
     """
         Informations toolbar
     """
@@ -26,7 +31,7 @@ class ToolbarInfo(Gtk.Bin, InfoController):
             Init toolbar
         """
         Gtk.Bin.__init__(self)
-        InfoController.__init__(self)
+        InformationController.__init__(self, ArtHelperEffect.NONE)
         builder = Gtk.Builder()
         builder.add_from_resource("/org/gnome/Lollypop/ToolbarInfo.ui")
         builder.connect_signals(self)
@@ -34,14 +39,7 @@ class ToolbarInfo(Gtk.Bin, InfoController):
         self.__width = 0
 
         self._infobox = builder.get_object("info")
-        self._infobox.connect("button-press-event",
-                              self.__on_infobox_button_press_event)
-        self._infobox.connect("button-release-event",
-                              self.__on_infobox_button_release_event)
         self.add(self._infobox)
-
-        self.__gesture = Gtk.GestureLongPress.new(self._infobox)
-        self.__gesture.connect("pressed", self.__on_infobox_pressed)
 
         self._spinner = builder.get_object("spinner")
 
@@ -51,18 +49,13 @@ class ToolbarInfo(Gtk.Bin, InfoController):
 
         self._title_label = builder.get_object("title")
         self._artist_label = builder.get_object("artist")
-        self._cover = builder.get_object("cover")
-        self._cover.set_property("has-tooltip", True)
-        # Since GTK 3.20, we can set cover full height
-        if Gtk.get_minor_version() > 18:
-            self._cover.get_style_context().add_class("toolbar-cover-frame")
-        else:
-            self._cover.get_style_context().add_class("small-cover-frame")
+        self._artwork = builder.get_object("artwork")
+        self._artwork.set_property("has-tooltip", True)
 
         self.connect("realize", self.__on_realize)
-        App().player.connect("loading-changed", self.__on_loading_changed)
         App().art.connect("album-artwork-changed", self.__update_cover)
         App().art.connect("radio-artwork-changed", self.__update_logo)
+        self.connect("button-press-event", self.__on_button_press_event)
 
     def do_get_preferred_width(self):
         """
@@ -91,7 +84,18 @@ class ToolbarInfo(Gtk.Bin, InfoController):
             Update widgets
             player as Player
         """
-        InfoController.on_current_changed(self, self.artsize, None)
+        if self.get_realized():
+            InformationController.on_current_changed(self, self.art_size, None)
+
+    def set_mini(self, mini):
+        """
+            Show/hide
+            @param mini as bool
+        """
+        if mini:
+            self.hide()
+        else:
+            self.show()
 
 #######################
 # PROTECTED           #
@@ -100,7 +104,10 @@ class ToolbarInfo(Gtk.Bin, InfoController):
         """
             Show hand cursor over
         """
-        eventbox.get_window().set_cursor(Gdk.Cursor(Gdk.CursorType.HAND2))
+        try:
+            eventbox.get_window().set_cursor(Gdk.Cursor(Gdk.CursorType.HAND2))
+        except:
+            Logger.warning(_("You are using a broken cursor theme!"))
 
 #######################
 # PRIVATE             #
@@ -112,11 +119,7 @@ class ToolbarInfo(Gtk.Bin, InfoController):
             @param album id as int
         """
         if App().player.current_track.album.id == album_id:
-            surface = App().art.get_album_artwork(
-                App().player.current_track.album,
-                self.artsize,
-                self._cover.get_scale_factor())
-            self._cover.set_from_surface(surface)
+            self.update_artwork(self.art_size, self.art_size)
 
     def __update_logo(self, art, name):
         """
@@ -125,39 +128,13 @@ class ToolbarInfo(Gtk.Bin, InfoController):
             @param name as str
         """
         if App().player.current_track.album_artist == name:
-            pixbuf = App().art.get_radio_artwork(name, self.artsize)
-            self._cover.set_from_surface(pixbuf)
+            pixbuf = App().art.get_radio_artwork(name, self.art_size)
+            self._artwork.set_from_surface(pixbuf)
 
-    def __on_infobox_pressed(self, gesture, x, y):
+    def __on_button_press_event(self, widget, event):
         """
             Show current track menu
-            @param gesture as Gtk.GestureLongPress
-            @param x as float
-            @param y as float
-        """
-        from lollypop.pop_menu import ToolbarMenu
-        menu = ToolbarMenu(App().player.current_track)
-        if App().player.current_track.id >= 0:
-            from lollypop.pop_menu import TrackMenuPopover
-            popover = TrackMenuPopover(App().player.current_track, menu)
-            popover.set_relative_to(self._infobox)
-        elif App().player.current_track.id == Type.RADIOS:
-            popover = Gtk.Popover.new_from_model(self._infobox, menu)
-        popover.show()
-
-    def __on_infobox_button_press_event(self, eventbox, event):
-        """
-            Block event if button is not left click
-            @param eventbox as Gtk.EventBox
-            @param event as Gdk.Event
-        """
-        if event.button != 1:
-            return True
-
-    def __on_infobox_button_release_event(self, eventbox, event):
-        """
-            Show track information popover
-            @param eventbox as Gtk.EventBox
+            @param widget as Gtk.Widget
             @param event as Gdk.Event
         """
         if event.button == 1:
@@ -170,40 +147,28 @@ class ToolbarInfo(Gtk.Bin, InfoController):
                 popover = InformationPopover()
                 popover.populate()
             popover.set_relative_to(self._infobox)
-            popover.show()
+            popover.popup()
         else:
-            self.__on_infobox_pressed(self.__gesture, 0, 0)
-
-    def __on_loading_changed(self, player, show):
-        """
-            Show spinner based on loading status
-            @param player as player
-            @param show as bool
-        """
-        if show:
-            self._title_label.hide()
-            self._artist_label.hide()
-            self._cover.hide()
-            self._spinner.show()
-            self._spinner.start()
-            self._infobox.show()
-        else:
-            self._spinner.hide()
-            self._spinner.stop()
+            from lollypop.pop_menu import ToolbarMenu
+            menu = ToolbarMenu(App().player.current_track)
+            if App().player.current_track.id >= 0:
+                from lollypop.pop_menu import TrackMenuPopover
+                popover = TrackMenuPopover(App().player.current_track, menu)
+                popover.set_relative_to(self._infobox)
+            elif App().player.current_track.id == Type.RADIOS:
+                popover = Popover.new_from_model(self._infobox, menu)
+            popover.popup()
+        return True
 
     def __on_realize(self, toolbar):
         """
             Calculate art size
             @param toolbar as ToolbarInfos
         """
-        style = self.get_style_context()
-        padding = style.get_padding(style.get_state())
-        artsize = self.get_allocated_height()\
-            - padding.top - padding.bottom
-        # Since GTK 3.20, we can set cover full height
-        if Gtk.get_minor_version() < 20:
-            artsize -= 2
-        self.set_artsize(artsize)
+        art_size = self.get_allocated_height()
+        self.set_art_size(art_size)
+        if App().player.current_track.id is not None:
+            self.on_current_changed(App().player)
 
     def __on_query_tooltip(self, widget, x, y, keyboard, tooltip):
         """

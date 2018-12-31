@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Generated with glade 3.20.2 -->
+<!-- Generated with glade 3.22.1 -->
 <interface>
   <requires lib="gtk+" version="3.12"/>
   <object class="GtkImage" id="close_image">
@@ -132,7 +132,7 @@
                 <property name="receives_default">True</property>
                 <property name="image">prev_image</property>
                 <property name="always_show_image">True</property>
-                <signal name="clicked" handler="_on_prev_btn_clicked" swapped="no"/>
+                <signal name="clicked" handler="_on_prev_button_clicked" swapped="no"/>
               </object>
               <packing>
                 <property name="expand">False</property>
@@ -147,7 +147,7 @@
                 <property name="receives_default">True</property>
                 <property name="image">play_image</property>
                 <property name="always_show_image">True</property>
-                <signal name="clicked" handler="_on_play_btn_clicked" swapped="no"/>
+                <signal name="clicked" handler="_on_play_button_clicked" swapped="no"/>
               </object>
               <packing>
                 <property name="expand">False</property>
@@ -162,7 +162,7 @@
                 <property name="receives_default">True</property>
                 <property name="image">next_image</property>
                 <property name="always_show_image">True</property>
-                <signal name="clicked" handler="_on_next_btn_clicked" swapped="no"/>
+                <signal name="clicked" handler="_on_next_button_clicked" swapped="no"/>
               </object>
               <packing>
                 <property name="expand">False</property>
@@ -254,22 +254,6 @@
           </packing>
         </child>
         <child>
-          <object class="GtkImage" id="cover">
-            <property name="visible">True</property>
-            <property name="can_focus">False</property>
-            <property name="halign">center</property>
-            <property name="valign">center</property>
-            <style>
-              <class name="cover-frame"/>
-            </style>
-          </object>
-          <packing>
-            <property name="left_attach">0</property>
-            <property name="top_attach">1</property>
-            <property name="width">3</property>
-          </packing>
-        </child>
-        <child>
           <object class="GtkRevealer" id="reveal">
             <property name="width_request">350</property>
             <property name="visible">True</property>
@@ -284,6 +268,27 @@
             <property name="left_attach">2</property>
             <property name="top_attach">1</property>
             <property name="height">4</property>
+          </packing>
+        </child>
+        <child>
+          <object class="GtkEventBox">
+            <property name="visible">True</property>
+            <property name="can_focus">False</property>
+            <property name="halign">center</property>
+            <property name="valign">center</property>
+            <signal name="button-release-event" handler="_on_image_button_release_event" swapped="no"/>
+            <signal name="realize" handler="_on_image_realize" swapped="no"/>
+            <child>
+              <object class="GtkImage" id="cover">
+                <property name="visible">True</property>
+                <property name="can_focus">False</property>
+              </object>
+            </child>
+          </object>
+          <packing>
+            <property name="left_attach">0</property>
+            <property name="top_attach">1</property>
+            <property name="width">3</property>
           </packing>
         </child>
         <child>

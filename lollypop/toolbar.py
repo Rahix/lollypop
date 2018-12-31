@@ -10,9 +10,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-from gi.repository import Gtk, Gst
+from gi.repository import Gtk
 
-from lollypop.define import App, WindowSize, LOLLYPOP_DATA_PATH
+from lollypop.define import App, Sizing
 from lollypop.toolbar_playback import ToolbarPlayback
 from lollypop.toolbar_info import ToolbarInfo
 from lollypop.toolbar_title import ToolbarTitle
@@ -25,19 +25,19 @@ class Toolbar(Gtk.HeaderBar):
         Lollypop toolbar
     """
 
-    def __init__(self):
+    def __init__(self, window):
         """
             Init toolbar
+            @param window as Window
         """
         Gtk.HeaderBar.__init__(self)
-        self.__width = WindowSize.SMALL
+        self.__width = Sizing.SMALL
         self.set_title("Lollypop")
-        self.__toolbar_playback = ToolbarPlayback()
+        self.__toolbar_playback = ToolbarPlayback(window)
         self.__toolbar_playback.show()
         self.__toolbar_info = ToolbarInfo()
         self.__toolbar_info.show()
         self.__toolbar_title = ToolbarTitle()
-        self.__toolbar_title.show()
         self.__toolbar_end = ToolbarEnd()
         self.__toolbar_end.show()
         self.pack_start(self.__toolbar_playback)
@@ -49,28 +49,14 @@ class Toolbar(Gtk.HeaderBar):
         App().player.connect("current-changed", self.__on_current_changed)
         App().player.connect("next-changed", self.__on_next_changed)
         App().player.connect("prev-changed", self.__on_prev_changed)
-
-    def do_get_preferred_height(self):
-        """
-            Here, we calculate height based on:
-            - playback toolbar if bigger
-            - infos toolbar to adapt to font size then
-        """
-        style = self.get_style_context()
-        padding = style.get_padding(style.get_state())
-        info_height = self.__toolbar_info.get_preferred_height()
-        if info_height[0] + padding.top + padding.bottom > 47:
-            height = info_height[0] + padding.top + padding.bottom
-        else:
-            height = Gtk.HeaderBar.do_get_preferred_height(self)[0]
-        return (height, height)
+        window.connect("adaptive-changed", self.__on_adaptive_changed)
 
     def do_get_preferred_width(self):
         """
-            Allow snapping for screen with width > 1400
+            Allow snapping for screen with width < 1400
             @return (int, int)
         """
-        return (WindowSize.SMALL, self.__width)
+        return (Sizing.SMALL, self.__width)
 
     def set_content_width(self, window_width):
         """
@@ -83,7 +69,7 @@ class Toolbar(Gtk.HeaderBar):
         if window is not None:
             available = window.get_width() - width
             if available > 0:
-                if window_width >= WindowSize.MEDIUM:
+                if window_width >= Sizing.MEDIUM:
                     title = available / 2
                 else:
                     title = available
@@ -96,21 +82,16 @@ class Toolbar(Gtk.HeaderBar):
             Update progress bar position
             @param value as int
         """
-        if not self.__toolbar_title._show_volume_control:
-            self.__toolbar_title._update_position(value)
+        if not self.__toolbar_title.show_volume_control:
+            self.__toolbar_title.update_position(value)
 
-    def set_mark(self):
+    def set_mini(self, mini):
         """
-            Mark toolbar with previously saved position
+            Set toolbar working when small
+            @param mini as bool
         """
-        try:
-            if App().settings.get_value("save-state"):
-                from pickle import load
-                position = load(open(LOLLYPOP_DATA_PATH + "/position.bin",
-                                     "rb"))
-                self.__toolbar_title.add_mark(position / Gst.SECOND)
-        except Exception as e:
-            Logger.error("Toolbar::restore_state(): %s" % e)
+        self.__toolbar_info.set_mini(mini)
+        self.__toolbar_title.set_mini(mini)
 
     @property
     def end(self):
@@ -155,6 +136,10 @@ class Toolbar(Gtk.HeaderBar):
         Logger.debug("Toolbar::_on_current_changed()")
         self.__toolbar_playback.on_current_changed(player)
         self.__toolbar_info.on_current_changed(player)
+        if App().player.current_track.id is None:
+            self.__toolbar_title.hide()
+        elif not App().window.miniplayer:
+            self.__toolbar_title.show()
         self.__toolbar_title.on_current_changed(player)
 
     def __on_prev_changed(self, player):
@@ -179,3 +164,14 @@ class Toolbar(Gtk.HeaderBar):
         """
         self.__toolbar_playback.on_status_changed(player)
         self.__toolbar_title.on_status_changed(player)
+
+    def __on_adaptive_changed(self, window, adaptive):
+        """
+            Show/hide next popover
+            @param window as Window
+            @param adaptive as bool
+        """
+        if adaptive:
+            self.__toolbar_end.next_popover.hide()
+        elif self.__toolbar_end.next_popover.should_be_shown():
+            self.__toolbar_end.next_popover.popup()

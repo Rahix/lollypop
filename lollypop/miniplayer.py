@@ -12,11 +12,16 @@
 
 from gi.repository import Gtk, Gdk
 
-from lollypop.controllers import InfoController, ProgressController
-from lollypop.define import App, WindowSize
+from gettext import gettext as _
+
+from lollypop.logger import Logger
+from lollypop.helper_art import ArtHelperEffect
+from lollypop.controller_information import InformationController
+from lollypop.controller_progress import ProgressController
+from lollypop.define import App, Sizing, Type
 
 
-class MiniPlayer(Gtk.Bin, InfoController, ProgressController):
+class MiniPlayer(Gtk.Bin, InformationController, ProgressController):
     """
         Toolbar end
     """
@@ -27,8 +32,9 @@ class MiniPlayer(Gtk.Bin, InfoController, ProgressController):
             @param width as int
         """
         self.__width = width
+        self.__height = 0
         Gtk.Bin.__init__(self)
-        InfoController.__init__(self)
+        InformationController.__init__(self, True, ArtHelperEffect.BLUR)
         ProgressController.__init__(self)
         builder = Gtk.Builder()
         builder.add_from_resource("/org/gnome/Lollypop/MiniPlayer.ui")
@@ -43,16 +49,17 @@ class MiniPlayer(Gtk.Bin, InfoController, ProgressController):
         self.__grid = builder.get_object("grid")
         self._title_label = builder.get_object("title")
         self._artist_label = builder.get_object("artist")
-        self._cover = builder.get_object("cover")
+        self._artwork = builder.get_object("cover")
         self.__signal_id1 = App().player.connect("current-changed",
                                                  self.__on_current_changed)
         self.__signal_id2 = App().player.connect("status-changed",
                                                  self.__on_status_changed)
         self.__on_current_changed(App().player)
         if App().player.current_track.id is not None:
-            self._update_position()
-            self.__on_status_changed(App().player)
+            self.update_position()
+            ProgressController.on_status_changed(self, App().player)
         self.add(builder.get_object("widget"))
+        self.connect("size-allocate", self.__on_size_allocate)
 
     def update_cover(self, width):
         """
@@ -60,7 +67,7 @@ class MiniPlayer(Gtk.Bin, InfoController, ProgressController):
             @param width as int
         """
         self.__width = width
-        InfoController.on_current_changed(self, width, None)
+        InformationController.on_current_changed(self, width, None)
 
     def do_get_preferred_width(self):
         """
@@ -80,7 +87,6 @@ class MiniPlayer(Gtk.Bin, InfoController, ProgressController):
         """
             Remove signal
         """
-        Gtk.Bin.do_destroy(self)
         ProgressController.do_destroy(self)
         App().player.disconnect(self.__signal_id1)
         App().player.disconnect(self.__signal_id2)
@@ -96,16 +102,19 @@ class MiniPlayer(Gtk.Bin, InfoController, ProgressController):
         """
         height = App().window.get_size()[1]
         if App().player.current_track.id is not None and\
-                height > WindowSize.MEDIUM:
-            if event.button == 1:
-                App().window.toolbar.end.show_list_popover(button)
-            elif App().player.current_track.id >= 0:
-                from lollypop.pop_menu import TrackMenuPopover, ToolbarMenu
-                popover = TrackMenuPopover(
-                    App().player.current_track,
-                    ToolbarMenu(App().player.current_track))
-                popover.set_relative_to(self)
-                popover.show()
+                height > Sizing.MEDIUM:
+            if App().player.current_track.id == Type.RADIOS:
+                pass
+            elif App().player.current_track.id is not None:
+                if event.button == 1:
+                    App().window.container.show_view(Type.INFO)
+                elif App().player.current_track.id >= 0:
+                    from lollypop.pop_menu import TrackMenuPopover, ToolbarMenu
+                    popover = TrackMenuPopover(
+                        App().player.current_track,
+                        ToolbarMenu(App().player.current_track))
+                    popover.set_relative_to(self)
+                    popover.popup()
         return True
 
     def _on_labels_realize(self, eventbox):
@@ -113,7 +122,10 @@ class MiniPlayer(Gtk.Bin, InfoController, ProgressController):
             Set mouse cursor
             @param eventbox as Gtk.EventBox
         """
-        eventbox.get_window().set_cursor(Gdk.Cursor(Gdk.CursorType.HAND2))
+        try:
+            eventbox.get_window().set_cursor(Gdk.Cursor(Gdk.CursorType.HAND2))
+        except:
+            Logger.warning(_("You are using a broken cursor theme!"))
 
 #######################
 # PRIVATE             #
@@ -125,7 +137,7 @@ class MiniPlayer(Gtk.Bin, InfoController, ProgressController):
         """
         if App().player.current_track.id is not None:
             self.show()
-        InfoController.on_current_changed(self, self.__width, None)
+        InformationController.on_current_changed(self, self.__width, None)
         ProgressController.on_current_changed(self, player)
 
     def __on_status_changed(self, player):
@@ -134,3 +146,18 @@ class MiniPlayer(Gtk.Bin, InfoController, ProgressController):
             @param player as Player
         """
         ProgressController.on_status_changed(self, player)
+
+    def __on_size_allocate(self, widget, allocation):
+        """
+            Update cover based on current height
+            @param widget as Gtk.Widget
+            @param allocation as Gdk.Rectangle
+        """
+        if self.__height == allocation.height:
+            return
+        self.__height = allocation.height
+        if self.__height == widget.get_preferred_height()[0]:
+            InformationController.__init__(self, True, ArtHelperEffect.BLUR)
+        else:
+            InformationController.__init__(self, True, ArtHelperEffect.NONE)
+        InformationController.on_current_changed(self, self.__width, None)

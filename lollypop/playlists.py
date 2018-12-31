@@ -24,6 +24,8 @@ from lollypop.objects import Track
 from lollypop.logger import Logger
 from lollypop.sqlcursor import SqlCursor
 from lollypop.localized import LocalizedCollation
+from lollypop.shown import ShownPlaylists
+from lollypop.database_upgrade import DatabasePlaylistsUpgrade
 
 
 class Playlists(GObject.GObject):
@@ -36,12 +38,17 @@ class Playlists(GObject.GObject):
         # Add or remove a playlist
         "playlists-changed": (GObject.SignalFlags.RUN_FIRST, None, (int,)),
         # Objects added/removed to/from playlist
-        "playlist-add": (GObject.SignalFlags.RUN_FIRST, None, (int, int, int)),
-        "playlist-del": (GObject.SignalFlags.RUN_FIRST, None, (int, int))
+        "playlist-track-added": (
+            GObject.SignalFlags.RUN_FIRST, None, (int, str, int)),
+        "playlist-track-removed": (
+            GObject.SignalFlags.RUN_FIRST, None, (int, str, int))
     }
     __create_playlists = """CREATE TABLE playlists (
                             id INTEGER PRIMARY KEY,
                             name TEXT NOT NULL,
+                            synced INT NOT NULL DEFAULT 0,
+                            smart_enabled INT NOT NULL DEFAULT 0,
+                            smart_sql TEXT,
                             mtime BIGINT NOT NULL)"""
 
     __create_tracks = """CREATE TABLE tracks (
@@ -55,13 +62,19 @@ class Playlists(GObject.GObject):
         self.thread_lock = Lock()
         GObject.GObject.__init__(self)
         self.LOVED = _("Loved tracks")
+        upgrade = DatabasePlaylistsUpgrade()
         # Create db schema
-        try:
-            with SqlCursor(self) as sql:
-                sql.execute(self.__create_playlists)
-                sql.execute(self.__create_tracks)
-        except:
-            pass
+        f = Gio.File.new_for_path(self._DB_PATH)
+        if not f.query_exists():
+            try:
+                with SqlCursor(self, True) as sql:
+                    sql.execute(self.__create_playlists)
+                    sql.execute(self.__create_tracks)
+                    sql.execute("PRAGMA user_version=%s" % upgrade.version)
+            except:
+                pass
+        else:
+            upgrade.upgrade(self)
 
     def add(self, name):
         """
@@ -70,7 +83,9 @@ class Playlists(GObject.GObject):
             @return playlist_id as int
             @thread safe
         """
-        with SqlCursor(self) as sql:
+        if name == self.LOVED:
+            return Type.LOVED
+        with SqlCursor(self, True) as sql:
             result = sql.execute("INSERT INTO playlists (name, mtime)"
                                  " VALUES (?, ?)",
                                  (name, datetime.now().strftime("%s")))
@@ -94,41 +109,145 @@ class Playlists(GObject.GObject):
             else:
                 return False
 
-    def rename(self, new_name, old_name):
+    def rename(self, playlist_id, name):
         """
             Rename playlist
-            @param new playlist name as str
-            @param old playlist name as str
+            @param playlist_id as int
+            @param name as str
         """
-        with SqlCursor(self) as sql:
-            playlist_id = self.get_id(old_name)
+        with SqlCursor(self, True) as sql:
             sql.execute("UPDATE playlists\
                         SET name=?\
-                        WHERE name=?",
-                        (new_name, old_name))
+                        WHERE rowid=?",
+                        (name, playlist_id))
             GLib.idle_add(self.emit, "playlists-changed", playlist_id)
 
-    def delete(self, name):
+    def remove(self, playlist_id):
         """
-            delete playlist
-            @param playlist name as str
+            Remove playlist
+            @param playlist_id as int
         """
-        with SqlCursor(self) as sql:
-            playlist_id = self.get_id(name)
+        with SqlCursor(self, True) as sql:
             sql.execute("DELETE FROM playlists\
-                        WHERE name=?",
-                        (name,))
+                        WHERE rowid=?",
+                        (playlist_id,))
             sql.execute("DELETE FROM tracks\
                         WHERE playlist_id=?",
                         (playlist_id,))
             GLib.idle_add(self.emit, "playlists-changed", playlist_id)
 
-    def remove(self, uri):
+    def clear(self, playlist_id):
         """
-            Remove track from playlists
+            Clear playlsit
+            @param playlist id as int
+        """
+        with SqlCursor(self, True) as sql:
+            sql.execute("DELETE FROM tracks\
+                         WHERE playlist_id=?", (playlist_id,))
+
+    def add_uri(self, playlist_id, uri, signal=False):
+        """
+            Add uri to playlist
+            @param uri as str
+            @param signal as bool
+        """
+        if self.exists_track(playlist_id, uri):
+            return
+        if signal:
+            position = len(self.get_track_uris(playlist_id))
+            self.emit("playlist-track-added", playlist_id, uri, position)
+        with SqlCursor(self, True) as sql:
+            sql.execute("INSERT INTO tracks VALUES (?, ?)", (playlist_id, uri))
+            sql.execute("UPDATE playlists SET mtime=?\
+                         WHERE rowid=?", (datetime.now().strftime("%s"),
+                                          playlist_id))
+
+    def add_uris(self, playlist_id, uris, signal=False):
+        """
+            Add uris to playlists (even if exists)
+            @param playlist id as int
+            @param uris as [str]
+            @param signal as bool
+        """
+        for uri in uris:
+            self.add_uri(playlist_id, uri, signal)
+
+    def add_tracks(self, playlist_id, tracks, signal=False):
+        """
+            Add tracks to playlist
+            @param playlist id as int
+            @param tracks as [Track]
+            @param signal as bool
+        """
+        for track in tracks:
+            self.add_uri(playlist_id, track.uri, signal)
+
+    def insert_track(self, playlist_id, track, position):
+        """
+            Insert track at position, will remove track first if exists
+            @param playlist_id as int
+            @param track as Track
+            @param position as int
+        """
+        SqlCursor.add(self)
+        track_ids = self.get_track_ids(playlist_id)
+        if track.id in track_ids:
+            index = track_ids.index(track.id)
+            track_ids.remove(track.id)
+            if index < position:
+                position -= 1
+        track_ids.insert(position, track.id)
+        self.clear(playlist_id)
+        tracks = [Track(track_id) for track_id in track_ids]
+        self.add_tracks(playlist_id, tracks)
+        SqlCursor.remove(self)
+
+    def remove_uri(self, playlist_id, uri, signal=False):
+        """
+            Remove uri from playlist
+            @param playlist_id as int
+            @param uri a str
+            @param signal as bool
+        """
+        if not self.exists_track(playlist_id, uri):
+            return
+        if signal:
+            uris = self.get_track_uris(playlist_id)
+            position = uris.index(uri)
+            self.emit("playlist-track-removed", playlist_id, uri, position)
+        with SqlCursor(self, True) as sql:
+            sql.execute("DELETE FROM tracks WHERE uri=? AND playlist_id=?",
+                        (uri, playlist_id))
+            sql.execute("UPDATE playlists SET mtime=?\
+                         WHERE rowid=?", (datetime.now().strftime("%s"),
+                                          playlist_id))
+
+    def remove_uris(self, playlist_id, uris, signal=False):
+        """
+            Remove uris from playlist
+            @param playlist id as int
+            @param uris as [str]
+            @param signal as bool
+        """
+        for uri in uris:
+            self.remove_uri(playlist_id, uri, signal)
+
+    def remove_tracks(self, playlist_id, tracks, signal=False):
+        """
+            Remove tracks from playlist
+            @param playlist id as int
+            @param tracks as [Track]
+            @param signal as bool
+        """
+        for track in tracks:
+            self.remove_uri(playlist_id, track.uri, signal)
+
+    def remove_uri_from_all(self, uri):
+        """
+            Remove track from all playlists
             @param uri as str
         """
-        with SqlCursor(self) as sql:
+        with SqlCursor(self, True) as sql:
             sql.execute("DELETE FROM tracks\
                         WHERE uri=?",
                         (uri,))
@@ -136,14 +255,26 @@ class Playlists(GObject.GObject):
     def get(self):
         """
             Return availables playlists
-            @return array of (id, string)
+            @return [int, str, str]
         """
         with SqlCursor(self) as sql:
-            result = sql.execute("SELECT rowid, name\
+            result = sql.execute("SELECT rowid, name, name\
                                   FROM playlists\
                                   ORDER BY name\
                                   COLLATE NOCASE COLLATE LOCALIZED")
             return list(result)
+
+    def get_ids(self):
+        """
+            Return availables playlists
+            @return [int]
+        """
+        with SqlCursor(self) as sql:
+            result = sql.execute("SELECT rowid\
+                                  FROM playlists\
+                                  ORDER BY name\
+                                  COLLATE NOCASE COLLATE LOCALIZED")
+            return list(itertools.chain(*result))
 
     def get_last(self):
         """
@@ -153,14 +284,14 @@ class Playlists(GObject.GObject):
         with SqlCursor(self) as sql:
             result = sql.execute("SELECT rowid, name\
                                   FROM playlists\
+                                  WHERE smart_enabled=0\
                                   ORDER BY mtime DESC\
                                   LIMIT 6")
             return list(result)
 
-    def get_tracks(self, playlist_id):
+    def get_track_uris(self, playlist_id):
         """
-            Return availables tracks for playlist
-            If playlist name == Type.ALL, then return all tracks from db
+            Return availables track uris for playlist
             @param playlist name as str
             @return [str]
         """
@@ -173,18 +304,41 @@ class Playlists(GObject.GObject):
     def get_track_ids(self, playlist_id):
         """
             Return availables track ids for playlist
-            If playlist name == Type.ALL, then return all tracks from db
-            @param playlist id as int
-            @return array of track id as int
+            @param playlist_id as int
+            @return [int]
         """
-        with SqlCursor(self) as sql:
-            result = sql.execute("SELECT music.tracks.rowid\
-                                  FROM tracks, music.tracks\
-                                  WHERE tracks.playlist_id=?\
-                                  AND music.tracks.uri=\
-                                  main.tracks.uri",
-                                 (playlist_id,))
-            return list(itertools.chain(*result))
+        track_ids = []
+        if playlist_id == Type.POPULARS:
+            track_ids = App().tracks.get_rated()
+            for track in App().tracks.get_populars():
+                track_ids.append(track)
+        elif playlist_id == Type.RECENTS:
+            track_ids = App().tracks.get_recently_listened_to()
+        elif playlist_id == Type.NEVER:
+            track_ids = App().tracks.get_never_listened_to()
+        elif playlist_id == Type.RANDOMS:
+            track_ids = App().tracks.get_randoms()
+        elif playlist_id == Type.LOVED:
+            track_ids = App().playlists.get_track_ids_sorted(playlist_id)
+        else:
+            with SqlCursor(self) as sql:
+                result = sql.execute("SELECT music.tracks.rowid\
+                                      FROM tracks, music.tracks\
+                                      WHERE tracks.playlist_id=?\
+                                      AND music.tracks.uri=\
+                                      main.tracks.uri",
+                                     (playlist_id,))
+                track_ids = list(itertools.chain(*result))
+        return track_ids
+
+    def get_tracks(self, playlist_id):
+        """
+            Return availables tracks for playlist
+            @param playlist_id as int
+            @return [Track]
+        """
+        return [Track(track_id)
+                for track_id in self.get_track_ids(playlist_id)]
 
     def get_duration(self, playlist_id):
         """
@@ -207,7 +361,6 @@ class Playlists(GObject.GObject):
     def get_track_ids_sorted(self, playlist_id):
         """
             Return availables track ids for playlist sorted by artist/album
-            If playlist name == Type.ALL, then return all tracks from db
             @param playlist id as int
             @return array of track id as int
         """
@@ -253,6 +406,10 @@ class Playlists(GObject.GObject):
         """
         if playlist_id == Type.LOVED:
             return self.LOVED
+        elif playlist_id < 0:
+            for (id, name, sortname) in ShownPlaylists.get(True):
+                if id == playlist_id:
+                    return name
 
         with SqlCursor(self) as sql:
             result = sql.execute("SELECT name\
@@ -285,70 +442,113 @@ class Playlists(GObject.GObject):
                 names.append(self.get_name(playlist_id))
         return names
 
-    def clear(self, playlist_id, notify=True):
+    def get_synced(self, playlist_id):
         """
-            Clear playlsit
-            @param playlist id as int
-            @param notify as bool
+            True if playlist synced
+            @param playlist_id as int
+            @return bool
         """
-        with SqlCursor(self) as sql:
-            sql.execute("DELETE FROM tracks\
-                         WHERE playlist_id=?", (playlist_id,))
-            if notify:
-                GLib.idle_add(self.emit, "playlist-del", playlist_id, None)
+        if playlist_id < 0:
+            playlist_ids = list(App().settings.get_value("sync-internal-ids"))
+            return playlist_id in playlist_ids
+        else:
+            with SqlCursor(self) as sql:
+                result = sql.execute("SELECT synced\
+                                     FROM playlists\
+                                     WHERE rowid=?", (playlist_id,))
+                v = result.fetchone()
+                if v is not None:
+                    return v[0]
+                return False
 
-    def add_tracks(self, playlist_id, tracks, notify=True):
+    def get_synced_ids(self):
         """
-            Add tracks to playlist if not already present
-            @param playlist id as int
-            @param tracks as [Track]
-            @param notify as bool
+            Return availables synced playlists
+            @return [int]
         """
         with SqlCursor(self) as sql:
-            changed = False
-            for track in tracks:
-                if not self.exists_track(playlist_id, track):
-                    changed = True
-                    sql.execute("INSERT INTO tracks"
-                                " VALUES (?, ?)",
-                                (playlist_id, track.uri))
-                if notify:
-                    GLib.idle_add(self.emit, "playlist-add",
-                                  playlist_id, track.id, -1)
-            if changed:
-                sql.execute("UPDATE playlists SET mtime=?\
-                             WHERE rowid=?", (datetime.now().strftime("%s"),
-                                              playlist_id))
+            synced_ids = list(App().settings.get_value("sync-internal-ids"))
+            result = sql.execute("SELECT rowid\
+                                  FROM playlists\
+                                  WHERE synced=1\
+                                  ORDER BY name\
+                                  COLLATE NOCASE COLLATE LOCALIZED")
+            return list(itertools.chain(*result)) + synced_ids
 
-    def add_uris(self, playlist_id, uris):
+    def get_smart(self, playlist_id):
         """
-            Add uris to playlists (even if exists)
-            @param playlist id as int
-            @param uris as [str]
+            True if playlist is smart
+            @param playlist_id as int
+            @return bool
         """
         with SqlCursor(self) as sql:
-            for uri in uris:
-                sql.execute("INSERT INTO tracks"
-                            " VALUES (?, ?)",
-                            (playlist_id, uri))
-            sql.execute("UPDATE playlists SET mtime=?\
-                         WHERE rowid=?", (datetime.now().strftime("%s"),
-                                          playlist_id))
+            result = sql.execute("SELECT smart_enabled\
+                                 FROM playlists\
+                                 WHERE rowid=?", (playlist_id,))
+            v = result.fetchone()
+            if v is not None:
+                return v[0]
+            return False
 
-    def remove_tracks(self, playlist_id, tracks, notify=True):
+    def get_smart_sql(self, playlist_id):
         """
-            Remove tracks from playlist
-            @param playlist id as int
-            @param tracks as [Track]
+            Get SQL smart request
+            @param playlist_id as int
+            @return str
         """
         with SqlCursor(self) as sql:
-            for track in tracks:
-                sql.execute("DELETE FROM tracks\
-                             WHERE uri=?\
-                             AND playlist_id=?", (track.uri, playlist_id))
-                if notify:
-                    GLib.idle_add(self.emit, "playlist-del",
-                                  playlist_id, track.id)
+            result = sql.execute("SELECT smart_sql\
+                                 FROM playlists\
+                                 WHERE rowid=?", (playlist_id,))
+            v = result.fetchone()
+            if v is not None:
+                return v[0]
+            return None
+
+    def set_synced(self, playlist_id, synced):
+        """
+            Mark playlist as synced
+            @param playlist_id as int
+            @param synced as bool
+        """
+        if playlist_id < 0:
+            synced_ids = list(App().settings.get_value("sync-internal-ids"))
+            if synced and playlist_id not in synced_ids:
+                synced_ids.append(playlist_id)
+            elif not synced and playlist_id in synced_ids:
+                synced_ids.remove(playlist_id)
+            App().settings.set_value("sync-internal-ids",
+                                     GLib.Variant("ai", synced_ids))
+        else:
+            with SqlCursor(self, True) as sql:
+                sql.execute("UPDATE playlists\
+                            SET synced=?\
+                            WHERE rowid=?",
+                            (synced, playlist_id))
+
+    def set_smart(self, playlist_id, smart):
+        """
+            Mark playlist as smart
+            @param playlist_id as int
+            @param smart as bool
+        """
+        with SqlCursor(self, True) as sql:
+            sql.execute("UPDATE playlists\
+                        SET smart_enabled=?\
+                        WHERE rowid=?",
+                        (smart, playlist_id))
+
+    def set_smart_sql(self, playlist_id, request):
+        """
+            Set playlist SQL smart request
+            @param playlist_id as int
+            @param request as str
+        """
+        with SqlCursor(self, True) as sql:
+            sql.execute("UPDATE playlists\
+                        SET smart_sql=?\
+                        WHERE rowid=?",
+                        (request, playlist_id))
 
     def import_uri(self, playlist_id, uri, start=None, down=True):
         """
@@ -405,11 +605,11 @@ class Playlists(GObject.GObject):
                         GLib.idle_add(self.emit, "playlist-add",
                                       playlist_id, track_id, start_idx)
                         start_idx += 1
-                    self.clear(playlist_id, False)
+                    self.clear(playlist_id)
                     tracks = []
                     for track_id in playlist_track_ids:
                         tracks.append(Track(track_id))
-                    self.add_tracks(playlist_id, tracks, False)
+                    self.add_tracks(playlist_id, tracks)
         except:
             pass
 
@@ -427,21 +627,19 @@ class Playlists(GObject.GObject):
             i += 1
         return i
 
-    def exists_track(self, playlist_id, track):
+    def exists_track(self, playlist_id, uri):
         """
             Check if track id exist in playlist
             @param playlist id as int
-            @param track as Track
+            @param uri as str
             @return bool
         """
         with SqlCursor(self) as sql:
-            result = sql.execute("SELECT main.tracks.uri\
-                                  FROM tracks, music.tracks\
-                                  WHERE music.tracks.rowid=?\
-                                  AND playlist_id=?\
-                                  AND music.tracks.uri=\
-                                  main.tracks.uri",
-                                 (track.id, playlist_id))
+            result = sql.execute("SELECT uri\
+                                  FROM tracks\
+                                  WHERE playlist_id=?\
+                                  AND uri=?",
+                                 (playlist_id, uri))
             v = result.fetchone()
             if v is not None:
                 return True
@@ -455,7 +653,7 @@ class Playlists(GObject.GObject):
             @return bool
         """
         # We do not use Album object for performance reasons
-        playlist_uris = self.get_tracks(playlist_id)
+        playlist_uris = self.get_track_uris(playlist_id)
         track_uris = album.track_uris
         return len(set(playlist_uris) & set(track_uris)) == len(track_uris)
 
@@ -467,15 +665,15 @@ class Playlists(GObject.GObject):
         basename = ".".join(f.get_basename().split(".")[:-1])
         parser = TotemPlParser.Parser.new()
         playlist_id = self.get_id(basename)
-        # FIXME Why Type.NONE? Need to check old code
-        if playlist_id == Type.NONE:
+        if playlist_id in [Type.NONE, Type.LOVED]:
             playlist_id = self.add(basename)
-            tracks = []
-            parser.connect("entry-parsed", self.__on_entry_parsed,
-                           playlist_id, tracks)
-            parser.parse_async(f.get_uri(), True,
-                               None, self.__on_parse_finished,
-                               playlist_id, tracks)
+            uris = self.get_tracks(playlist_id)
+            if not uris:
+                parser.connect("entry-parsed", self.__on_entry_parsed,
+                               playlist_id, uris)
+                parser.parse_async(f.get_uri(), True,
+                                   None, self.__on_parse_finished,
+                                   playlist_id, uris)
 
     def get_cursor(self):
         """

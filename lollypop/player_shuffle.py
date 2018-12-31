@@ -12,11 +12,11 @@
 
 import random
 
-from lollypop.helper_task import TaskHelper
 from lollypop.define import Shuffle, NextContext, App, Type
 from lollypop.player_base import BasePlayer
 from lollypop.objects import Track, Album
 from lollypop.list import LinkedList
+from lollypop.logger import Logger
 
 
 class ShufflePlayer(BasePlayer):
@@ -45,9 +45,6 @@ class ShufflePlayer(BasePlayer):
         self.__already_played_albums = []
         # Tracks already played for albums
         self.__already_played_tracks = {}
-        # If we have tracks/albums to ignore in party mode, add them
-        helper = TaskHelper()
-        helper.run(self.__init_party_blacklist)
         # Reset user playlist
         self._playlist_tracks = []
         self._playlist_ids = []
@@ -58,7 +55,7 @@ class ShufflePlayer(BasePlayer):
             @return Track
         """
         track = Track()
-        if self._shuffle != Shuffle.NONE or self.__is_party:
+        if self._shuffle == Shuffle.TRACKS or self.__is_party:
             if self.shuffle_has_next:
                 track = self.__history.next.value
             elif self._albums or (self._playlist_tracks and
@@ -72,28 +69,12 @@ class ShufflePlayer(BasePlayer):
             @return Track
         """
         track = Track()
-        if self._shuffle != Shuffle.NONE or self.__is_party:
+        if self._shuffle == Shuffle.TRACKS or self.__is_party:
             if self.shuffle_has_prev:
                 track = self.__history.prev.value
             else:
                 track = self._current_track
         return track
-
-    def get_party_ids(self):
-        """
-            Return party ids
-            @return [ids as int]
-        """
-        party_settings = App().settings.get_value("party-ids")
-        ids = []
-        genre_ids = App().genres.get_ids()
-        genre_ids.append(Type.POPULARS)
-        genre_ids.append(Type.RECENTS)
-        for setting in party_settings:
-            if isinstance(setting, int) and\
-               setting in genre_ids:
-                ids.append(setting)
-        return ids
 
     def set_party(self, party):
         """
@@ -114,7 +95,6 @@ class ShufflePlayer(BasePlayer):
                 self._plugins2.rgvolume.props.album_mode = 1
 
         if party:
-            self._external_tracks = []
             self.set_party_ids()
             # Start a new song if not playing
             if (self._current_track.id in [None, Type.RADIOS])\
@@ -125,8 +105,7 @@ class ShufflePlayer(BasePlayer):
                 self.play()
         else:
             # We want current album to continue playback
-            if self._current_track.album not in self._albums:
-                self._albums.insert(0, self._current_track.album)
+            self._albums = [self._current_track.album]
             self.set_next()
             self.set_prev()
         self.emit("party-changed", party)
@@ -135,12 +114,15 @@ class ShufflePlayer(BasePlayer):
         """
             Set party mode ids
         """
-        party_ids = self.get_party_ids()
-        if party_ids:
-            album_ids = App().albums.get_party_ids(party_ids)
-        else:
-            album_ids = App().albums.get_ids()
-        self._albums = [Album(album_id) for album_id in album_ids]
+        party_ids = App().settings.get_value("party-ids")
+        album_ids = App().albums.get_ids([], party_ids, True)
+        if not album_ids:
+            album_ids = App().albums.get_ids([], party_ids, False)
+        self._albums = []
+        for album_id in album_ids:
+            album = Album(album_id, [], [], True)
+            self._albums.append(album)
+        self.emit("playlist-changed")
 
     @property
     def is_party(self):
@@ -233,41 +215,17 @@ class ShufflePlayer(BasePlayer):
                     track = self.__get_tracks_random()
                 else:
                     track = self.__get_playlists_random()
-            else:
-                track = self.__get_albums_random()
-            # Try to get another one track after reseting history
-            if track.id is None:
-                self.__already_played_albums = []
-                self.__already_played_tracks = {}
-                self.__history = []
-                return self.__get_next()
-            return track
-        except:  # Recursion error
-            return Track()
-
-    def __get_albums_random(self):
-        """
-            Return a track for current album or if finished
-            from a random album
-            @return Track
-        """
-        album = self._current_track.album
-        new_track_position = self._current_track.position + 1
-        # next album
-        if new_track_position >= len(album.track_ids):
-            self.__already_played_albums.append(album)
-            for album in sorted(
-                    self._albums, key=lambda *args: random.random()):
-                # Ignore current album, not an issue if playing one album
-                # in shuffle because LinearPlayer will handle next()
-                if album not in self.__already_played_albums and\
-                        album != App().player.current_track.album:
-                    track = album.tracks[0]
-                    break
-        # next track
-        else:
-            track = album.tracks[new_track_position]
-        return track
+                # All track dones
+                # Try to get another one track after reseting history
+                if track.id is None:
+                    self.__already_played_albums = []
+                    self.__already_played_tracks = {}
+                    self.__history = []
+                    return self.__get_next()
+                return track
+        except Exception as e:  # Recursion error
+            Logger.error("ShufflePLayer::__get_next(): %s", e)
+        return Track()
 
     def __get_playlists_random(self):
         """
@@ -314,12 +272,3 @@ class ShufflePlayer(BasePlayer):
             self.__already_played_tracks[track.album] = []
         if track not in self.__already_played_tracks[track.album]:
             self.__already_played_tracks[track.album].append(track)
-
-    def __init_party_blacklist(self):
-        """
-            Add party mode blacklist to already played tracks
-        """
-        if self.__is_party:
-            for track_id in App().playlists.get_track_ids(Type.NOPARTY):
-                track = Track(track_id)
-                self.__add_to_shuffle_history(track)
